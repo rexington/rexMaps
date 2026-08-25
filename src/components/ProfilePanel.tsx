@@ -121,7 +121,7 @@ export default function ProfilePanel() {
   const span = profile ? Math.max(1, profile.maxEle - profile.minEle) : 1;
 
   return (
-    <div className="absolute bottom-8 left-1/2 w-[540px] max-w-[calc(100vw-1rem)] -translate-x-1/2 rounded-lg bg-white/95 p-2 shadow-lg backdrop-blur">
+    <div className="absolute bottom-8 left-1/2 z-10 w-[540px] max-w-[calc(100vw-1rem)] -translate-x-1/2 rounded-lg bg-white/95 p-2 shadow-lg backdrop-blur">
       <div className="flex items-baseline gap-3 px-1 pb-1">
         <span className="truncate text-sm font-medium text-gray-900">{obj.title}</span>
         <span className="text-xs text-gray-600">

@@ -6,9 +6,10 @@ import { haversine, pathLength, type LngLat } from "./geo";
  * Also the future data source for slope shading + 3D terrain (see docs/LAYERS.md).
  */
 
-const TILE_URL = (z: number, x: number, y: number) =>
+/** Shared with slope.ts and the offline downloader — one source of truth. */
+export const terrariumTileUrl = (z: number, x: number, y: number) =>
   `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
-const Z = 13; // ~19 m/px at mid latitudes — plenty for trail profiles
+export const ELEVATION_Z = 13; // ~19 m/px at mid latitudes — plenty for trail profiles
 const TILE_SIZE = 256;
 
 const tileCache = new Map<string, Promise<ImageData | null>>();
@@ -19,7 +20,7 @@ function fetchTile(x: number, y: number): Promise<ImageData | null> {
   if (!cached) {
     cached = (async () => {
       try {
-        const res = await fetch(TILE_URL(Z, x, y));
+        const res = await fetch(terrariumTileUrl(ELEVATION_Z, x, y));
         if (!res.ok) return null;
         const bitmap = await createImageBitmap(await res.blob());
         const canvas = document.createElement("canvas");
@@ -38,7 +39,7 @@ function fetchTile(x: number, y: number): Promise<ImageData | null> {
 
 /** [lng,lat] → global pixel coords at zoom Z (Web Mercator). */
 function toPixel([lng, lat]: LngLat): { px: number; py: number } {
-  const scale = TILE_SIZE * 2 ** Z;
+  const scale = TILE_SIZE * 2 ** ELEVATION_Z;
   const x = ((lng + 180) / 360) * scale;
   const rad = (lat * Math.PI) / 180;
   const y =

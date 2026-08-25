@@ -6,6 +6,7 @@ import { EMPTY_FC, objectStyleParts } from "./objectLayers";
 import { applyGroupOpacity } from "./opacity";
 import { layerDef } from "./registry";
 import { sentinelSource } from "./sentinel";
+import { trailOverlayStyleParts } from "./trailOverlay";
 import type { ActiveLayer, RasterLayerDef } from "./types";
 
 /**
@@ -58,6 +59,7 @@ export async function buildStyle(
   stack: ActiveLayer[],
   objectsData: FeatureCollection = EMPTY_FC,
   draftData: FeatureCollection = EMPTY_FC,
+  options: { trailOverlay?: boolean } = {},
 ): Promise<StyleSpecification> {
   const style: StyleSpecification = {
     version: 8,
@@ -96,6 +98,19 @@ export async function buildStyle(
     } catch (err) {
       // A broken source shouldn't take down the whole map.
       console.error(`layer ${def.id} failed to build`, err);
+    }
+  }
+
+  // "Possible routes" hint while drawing a snapped line — above every base
+  // layer (so it works over satellite/USFS with no trail data of its own),
+  // below the user's own drawn objects/draft (so those stay unambiguous).
+  if (options.trailOverlay) {
+    try {
+      const overlay = await trailOverlayStyleParts();
+      Object.assign(style.sources, overlay.sources);
+      style.layers.push(...overlay.layers);
+    } catch (err) {
+      console.error("trail overlay failed to build", err);
     }
   }
 

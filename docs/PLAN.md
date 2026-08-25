@@ -29,7 +29,7 @@ status column as stages complete, and log notable decisions in the Decision Log.
 | 3 | Routing: snap-to-trail via BRouter public server (hiking profile), straight-line segment toggle, elevation profile from Terrarium DEM tiles, vertex editing for lines | ✅ done |
 | 4 | Route research: terrain stats along line, slope-angle shading layer, place search (Nominatim), Sentinel-2 recent imagery (Copernicus Data Space WMTS) | ✅ done |
 | 5 | Deploy: `npm run deploy`, custom domain, Cloudflare Access policy in front | ✅ done |
-| 6 | Offline/PWA: service worker, download-map-area to device, R2-hosted PMTiles for cache-friendly sources | ⬜ |
+| 6 | Offline/PWA: service worker, download-map-area to device | ✅ done |
 | 7+ | Backlog (below) | ⬜ |
 
 ## Stage details & implementation notes
@@ -172,12 +172,215 @@ status column as stages complete, and log notable decisions in the Decision Log.
     rule.
 
 ### Stage 6 — Offline / PWA
-- Architected-for: all tile access already goes through the layer registry, so
-  an area-downloader can enumerate tiles per layer; add service worker + IndexedDB/
-  Cache API storage; respect ToS (Google tiles may NOT be cached/downloaded —
-  offline packs use the free/self-hosted layers only).
+
+**6a — PWA shell (done 2026-08-25).**
+- `src/app/manifest.ts` (served at `/manifest.webmanifest`), `app/icon.tsx` +
+  `app/apple-icon.tsx` (Next's icon file convention, rendered via `next/og`
+  `ImageResponse`) + two extra hand-rolled routes `app/icons/192|512/route.tsx`
+  for the manifest's `icons[]`, which needs stable URLs (Next's own `/icon`
+  path carries a cache-busting query Next controls, not us). Shared glyph in
+  `src/lib/appIcon.tsx`. **Gotcha**: the classic CSS border-triangle trick
+  renders as a plain rectangle under Satori (ImageResponse's engine) — no
+  triangle, just solid color. Fixed with an inline `<svg><polygon>` instead,
+  which Satori does support. Verified all four icon routes render correctly
+  under the actual `workerd` runtime (not just Next's own build-time Node
+  process) via local `wrangler dev`.
+- `public/sw.js`: hand-rolled, no bundler (same reasoning as self-hosting the
+  MapLibre worker — a next-pwa-style plugin is another Turbopack-compat risk).
+  Two cache namespaces: `rexmaps-shell-v1` (app shell + hashed static assets,
+  pruned on version bump) and `rexmaps-tiles-v1` (basemap/terrain tiles,
+  **never** pruned by a shell version bump — Stage 6b's downloaded packs live
+  here and must survive app updates). Cache-first for a fixed allowlist of
+  evergreen tile hosts (OpenFreeMap, arcgisonline.com, USGS, USFS Basemap,
+  Terrarium DEM on S3); explicit never-cache for `tile.googleapis.com` (ToS)
+  and this app's own `/api/*`; everything else (BRouter, Nominatim, CDSE) left
+  untouched. A `KILL_SWITCH` constant, flip + redeploy to remotely unregister
+  and wipe all caches — the only recovery path for a bad SW already installed
+  on someone's phone.
+  - **Critical bug avoided, not yet hit**: Cloudflare Access serves its login
+    page via a redirect at the exact same URL as the app when a session has
+    lapsed. A naive "network-first, cache the response" navigation handler
+    would cache that login page as the app shell, bricking offline use. Fixed:
+    only `cache.put()` a navigation response that's same-origin, `!redirected`,
+    and `res.ok`; still `return res` (whatever it is) to the browser so normal
+    online re-authentication isn't affected — only the *cache write* is
+    guarded, not the response the user sees.
+  - Verified `/sw.js` serves `Cache-Control: public, max-age=0, must-revalidate`
+    (OpenNext/Wrangler's asset default — no extra config needed to avoid
+    pinning a stale worker).
+- `ServiceWorkerRegister.tsx`: registers only when `NODE_ENV === "production"`
+  — an active SW in dev would intercept Turbopack's HMR requests.
+- **Verified via CDP against a local `wrangler dev` (real `workerd`, not
+  `next dev`)**: one online pageload organically cached 63 tiles; a hard
+  navigation reload with the network fully cut (CDP
+  `Network.emulateNetworkConditions`) rendered the complete app — toolbar,
+  panels, basemap, hillshade — pixel-identical to the online load, from the
+  service worker alone. Deployed; confirmed both `maps.ke6mt.us` and the
+  `workers.dev` fallback (including `/sw.js` itself) still correctly gated by
+  Cloudflare Access post-deploy.
+
+**6b — Download-map-area to device.** All tile access already goes through
+the layer registry, so an area-downloader can enumerate tiles per layer.
+Scope, decided with advisor input before writing code:
+- Cache Storage for tile bytes (not IndexedDB — it's literally what Cache
+  Storage is for); pack *metadata* (name, bbox, layers, tile count, size)
+  joins the existing zustand-persist localStorage pattern, no new persistence
+  tech.
+- v1 downloads the **current viewport only** (no separate box-drawing tool —
+  pan/zoom first, like most offline-map apps).
+- Google **and Sentinel** excluded from the layer picker. Google is ToS (as
+  before); Sentinel is structural, not preferential — its tile URLs embed
+  `TIME={today}`, so a pack cached today requests URLs the live app will never
+  ask for again tomorrow. Guaranteed miss, not merely low-value.
+- Terrain (Terrarium DEM) tiles cached at their fixed z13 (`elevation.ts`) with
+  a 1-tile bbox apron per zoom (matches `slope.ts`'s 8-neighbor read) makes
+  elevation profiles **and** slope-angle shading work offline for free, since
+  both hit plain `fetch()` against `s3.amazonaws.com/elevation-tiles-prod/`
+  and that host is already in the SW's cache-first allowlist — confirmed
+  before writing any download-orchestrator code, not assumed.
+- Pre-flight tile-count/size estimate shown before download starts, with a
+  refuse-above-threshold guard (tile counts scale as 4^z — an unbounded
+  z10→z16 pull across 3 layers is tens of thousands of tiles). Call
+  `navigator.storage.persist()` once a download starts; note in the UI that
+  iOS Safari evicts storage for tabs not installed to the home screen after
+  ~7 days idle.
+- OpenFreeMap's vector source resolves through a **daily-rotating TileJSON**
+  (`tiles.openfreemap.org/planet` → `.../planet/20260823_080002_pt/{z}/{x}/{y}.pbf`,
+  confirmed 2026-08-25) — resolved at download time via the existing
+  `getFragment()`, never hardcoded. The SW's host-based (not path-based)
+  cache-first rule for `tiles.openfreemap.org` transparently captures that
+  TileJSON response too, so a stale pack still resolves offline without any
+  extra code.
+- Glyphs: don't chase full coverage. Pull the distinct `text-font` values off
+  the resolved style fragment's layers, fetch ranges 0–255 and 256–511 per
+  font. Non-Latin labels are a known, documented v1 limitation.
+- Canary fetch (one tile, checked for `response.type !== "opaque"`) per host
+  before the bulk loop — `cache.put()` silently mishandles a response it can't
+  verify from a host lacking CORS, better to fail loud on tile 1 than tile 4000.
+- "Delete" on a pack removes it from the list only (tiles may be shared with
+  other overlapping packs; no per-tile refcounting in v1) — a separate "clear
+  all offline data" nukes the whole tile cache. UI copy says this plainly.
+- R2-hosted PMTiles pre-baking, originally listed under this stage, is
+  **out of scope** for 6b and folded into the existing FSTopo-quads backlog
+  item instead — it solves a different problem (hosting a dataset with no
+  live tile service at all) than this stage's actual need (on-device caching
+  of already-live tile services for one user).
+
+**6b implementation (done 2026-08-25).** `src/lib/offline.ts` (enumeration +
+fetch orchestrator), `OfflinePackMeta` in the store (persisted metadata list),
+`src/components/OfflineSection.tsx` (a new collapsible section inside
+LayerPanel, not a new floating corner — deliberately, to avoid reopening the
+overlap problem fixed earlier this stage).
+- **Real bug found and fixed via testing, not assumed away**: the first
+  end-to-end run enumerated tiles for every source across the *entire*
+  requested zoom range regardless of that source's own coverage — OpenFreeMap's
+  Natural Earth shaded-relief overlay (`ne2sr`) only exists at low native
+  zoom, so requesting it at z12–14 **404'd on 32 of 94 URLs**, silently
+  (per-tile failures don't abort the pack). Root-caused via CDP network
+  logging, not guessed. Fixed by reading each source's actual `minzoom`/
+  `maxzoom` (from the resolved style/TileJSON for vector layers, from the
+  registry `LayerDef` for raster) and clamping enumeration to it — which also
+  fixed raster `LAYER_DEFS` that were previously ignoring their own declared
+  `maxzoom`. No coverage lost: MapLibre already overzooms a cached
+  maxzoom tile to cover a deeper live view.
+- Also fixed in the same pass: `downloadArea()`'s returned `tileCount` was
+  the *attempted* URL count, not the count that actually landed in the
+  cache — cosmetically fine until a host has any failures, then the pack
+  metadata overstates what's really available offline. Now counts only
+  successful `cache.put()`s.
+- Verified with two separate CDP scripts: (1) the download UI end-to-end —
+  opening the form correctly pre-checks the currently active+visible
+  layers, the debounced estimate matches the real run, the pack's
+  `tileCount` now exactly equals `caches.open("rexmaps-tiles-v1").keys().length`
+  (62 = 62), zero HTTP failures after the zoom-bounds fix; (2) the actual
+  payoff — downloaded a pack at z15 (a zoom level + viewport never organically
+  browsed in that session), then went fully offline (CDP network emulation)
+  and did a hard reload to that exact viewport: the vector basemap, labels,
+  and glyphs all rendered correctly from the downloaded pack alone, zero
+  failed resource loads.
+- Byte-size estimate constant tuned from an assumed 15 KB/tile to 25 KB/tile
+  after measuring ~54 KB/tile on a real (small, sprite/glyph-heavy) sample —
+  still explicitly a rough heads-up number, not a byte-accurate quote.
+
+### Mobile layout pass (done 2026-08-25)
+User feedback after trying it on a phone: the horizontal top-center toolbar
+competed with the top corner dropdowns for space, the draw-in-progress hint
+didn't fit, and double-click/Enter to finish a line is impractical on touch.
+- **Toolbar** (`Toolbar.tsx`) is a vertical stack on the right below the top
+  corner buttons (mobile default: `right-2 top-20 flex-col`) and reverts to
+  the original horizontal top-center layout at `sm:` (640px) and up — freeing
+  `top-2` for the ObjectsPanel/LayerPanel dropdowns on mobile, which no longer
+  need the `top-14` offset added earlier this stage (that offset is now
+  `sm:top-14`-only, still needed on desktop where the toolbar stays top-center).
+- Both dropdowns **default closed** on load (`useState(false)`, was `true`) —
+  a general preference, not mobile-specific.
+- **DrawHint** repositioned to the bottom on mobile (`bottom-6`, was
+  `top-14`), widened and wrapping (`flex-wrap`) instead of a fixed-width
+  nowrap pill, reverting to the original top-center pill at `sm:`. Hint text
+  dropped "Enter/double-click finishes" (still work, just no longer the
+  primary path) in favor of an explicit **✓ Finish** chip — shown once the
+  draft has enough points (`draftFinish()` already has identical line/polygon
+  logic, so one chip covers both tools, confirmed by testing polygon too).
+- **Real bug found via testing, not a screenshot artifact — verify before
+  trusting a headless screenshot that disagrees with `getBoundingClientRect()`**:
+  the Finish/Undo/Snap chips were computed at correct, fully-in-viewport
+  positions (confirmed via direct DOM measurement) but simply didn't render
+  in the capture, and `document.elementFromPoint()` at that exact spot
+  returned MapLibre's own attribution link instead of our button. Root cause:
+  `maplibre-gl.css` sets `.maplibregl-ctrl-{corner}` to `z-index: 2`; our
+  overlay `<div>`s had no z-index (`auto`), so MapLibre's own corner controls
+  were winning the paint/hit-test order wherever they happened to overlap our
+  UI — invisible AND unclickable, not just visually behind. Fixed by giving
+  every top-level floating panel (`Toolbar`/`SearchBox` wrapper, `DrawHint`,
+  `ObjectsPanel`, `LayerPanel`, `ProfilePanel`) an explicit `z-10`. On the
+  right side, additionally reserved a `right-16` gap so the hint doesn't
+  physically cover MapLibre's zoom/geolocate buttons at all (z-index makes
+  *our* UI win a visual conflict, which is wrong for controls the user still
+  needs — avoiding the overlap outright is correct there; z-10 alone is the
+  right fix for the non-interactive attribution link on the left).
+
+### Trail overlay while drawing (done 2026-08-25)
+User request: while drawing a line with snap on, show a hint of nearby known
+trails/tracks — CalTopo has this, but is known to bog the browser badly when
+zoomed way out over dense trail data. Also wanted specifically so it's useful
+over bases with no trail data of their own (satellite, or USFS where a route
+isn't mapped).
+- `src/lib/layers/trailOverlay.ts`: a dashed blue line layer sourced from
+  OpenFreeMap's free vector tiles (`transportation` source-layer, `class` in
+  `path`/`track`/`service` — foot paths, forest/service roads, 4x4 tracks;
+  not an exact match for BRouter's routable graph, just a helpful visual
+  cue). Deliberately glyph-free (no labels), so it never collides with the
+  "one vector layer at a time" rule — that rule exists only because of the
+  single-glyphs-URL constraint, and this overlay doesn't need glyphs, so it
+  layers over *any* active base (raster or vector) without conflict. Same
+  daily-rotating-TileJSON lesson as the offline downloader: the tile
+  template is resolved fresh via `fetch`, never hardcoded.
+- **Performance guard, the actual point of the request**: `minzoom: 12` is
+  set on the vector *source* itself, not just the layer. A layer-only minzoom
+  would still let MapLibre fetch and parse tiles at low zoom and merely skip
+  painting them — source minzoom means MapLibre never requests those tiles at
+  all below that zoom. Verified: zooming from z14 to z6 while still in
+  line+snap mode produced **zero** additional `openfreemap` network requests.
+- Contextual, not a togglable layer: `compositor.ts`'s `buildStyle()` takes
+  an `options.trailOverlay` flag, wired in `MapView.tsx` from
+  `tool === "line" && snapEnabled`. Appears only while actually drawing a
+  snapped line, disappears the moment you switch tools (verified: the
+  `trail-overlay-line` MapLibre layer is fully gone on switching to select) —
+  deliberately not a persistent LayerPanel entry, both because the request
+  was specifically about the draw workflow and because an always-on trail
+  layer is exactly the kind of thing that invites the CalTopo bogging
+  problem if someone forgets to turn it off while browsing zoomed out.
+- Verified visually at Timberline Lodge over Esri World Imagery (no
+  OpenFreeMap layer in the stack at all): the ski area's road/trail network
+  renders clearly as a dashed blue overlay directly on the satellite imagery.
 
 ## Backlog / ideas
+- **Line/track simplification** (route/track editing): reduce point count on
+  a line that has too many vertices (e.g. from a dense GPX import or a long
+  snapped route) — a Douglas-Peucker-style tolerance simplify, selected
+  object editor gets a "Simplify" action/slider. Needs to preserve routing
+  topology (`waypoints`/`legs`/`snapped`) sensibly, or fall back to
+  simplifying the flat `coords` for lines that predate routing.
 - Per-object opacity (drawn markers/lines/polygons — distinct from the
   existing per-*layer* opacity sliders in LayerPanel). Extend adjustable width
   to polygon outlines and marker size too (line width for the "line" kind

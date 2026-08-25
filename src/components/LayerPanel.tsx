@@ -25,6 +25,7 @@ import {
 import type { ActiveLayer, LayerDef } from "@/lib/layers/types";
 import { mapRef } from "@/lib/mapRef";
 import { useMapStore } from "@/store/mapStore";
+import OfflineSection from "./OfflineSection";
 
 /** Why this layer can't be enabled yet (missing credential), or null. */
 function missingKeyReason(def: LayerDef): string | null {
@@ -200,7 +201,7 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
 
 export default function LayerPanel() {
   const { stack, addLayer, moveLayer } = useMapStore();
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
   );
@@ -225,9 +226,11 @@ export default function LayerPanel() {
   const overlays = available.filter((d) => d.category === "overlay");
 
   return (
-    <div className="absolute right-2 top-14 w-72 max-w-[calc(100vw-1rem)] select-none">
-      {/* top-14, not top-2: clears the centered Toolbar/SearchBox row so an
-          expanded panel can't overlap the map tools at narrower widths. */}
+    <div className="absolute right-2 top-2 z-10 w-72 max-w-[calc(100vw-1rem)] select-none sm:top-14">
+      {/* sm:top-14, not top-2: on desktop this clears the centered
+          Toolbar/SearchBox row so an expanded panel can't overlap the map
+          tools; on mobile the toolbar moves off to the right instead, so
+          top-2 is free. */}
       <button
         onClick={() => setOpen((o) => !o)}
         className="mb-1 ml-auto block rounded-md bg-white/95 px-3 py-1.5 text-sm font-medium text-gray-800 shadow"
@@ -235,7 +238,7 @@ export default function LayerPanel() {
         {open ? "Layers ▾" : "Layers ▸"}
       </button>
       {open && (
-        <div className="max-h-[calc(100dvh-8rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur">
+        <div className="max-h-[calc(100dvh-5rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur sm:max-h-[calc(100dvh-8rem)]">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -288,6 +291,8 @@ export default function LayerPanel() {
                 </div>
               ),
           )}
+
+          <OfflineSection />
         </div>
       )}
     </div>

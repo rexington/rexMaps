@@ -1,4 +1,5 @@
 import { addProtocol } from "maplibre-gl";
+import { terrariumTileUrl } from "../elevation";
 
 /**
  * Slope-angle shading, computed client-side from Terrarium DEM tiles and
@@ -12,8 +13,6 @@ import { addProtocol } from "maplibre-gl";
  * amortized cost is ~1 DEM fetch + decode per rendered tile.
  */
 
-const TERRARIUM = (z: number, x: number, y: number) =>
-  `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
 const SIZE = 256;
 
 // Discrete slope bands: [minDegrees, r, g, b]. Below the first band → transparent.
@@ -40,7 +39,7 @@ function elevations(z: number, x: number, y: number): Promise<Float32Array | nul
   if (!p) {
     p = (async () => {
       try {
-        const res = await fetch(TERRARIUM(z, x, y));
+        const res = await fetch(terrariumTileUrl(z, x, y));
         if (!res.ok) return null;
         const bitmap = await createImageBitmap(await res.blob());
         const canvas = document.createElement("canvas");

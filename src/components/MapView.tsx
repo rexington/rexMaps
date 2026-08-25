@@ -97,6 +97,8 @@ export default function MapView() {
   const buildSeq = useRef(0);
   const stack = useMapStore((s) => s.stack);
   const sentinel = useMapStore((s) => s.sentinel);
+  // "Possible routes" hint: only while actually drawing a snapped line.
+  const trailOverlay = useMapStore((s) => s.tool === "line" && s.snapEnabled);
 
   // Init once.
   useEffect(() => {
@@ -257,26 +259,29 @@ export default function MapView() {
     };
   }, []);
 
-  // Rebuild style whenever the layer stack (or Sentinel options, which change
-  // that layer's tile URLs) changes; embeds current object data.
+  // Rebuild style whenever the layer stack, Sentinel options (which change
+  // that layer's tile URLs), or the trail-overlay condition changes; embeds
+  // current object data.
   useEffect(() => {
     const seq = ++buildSeq.current;
     let cancelled = false;
-    buildStyle(stack, currentObjectsFC(), currentDraftFC()).then((style) => {
+    buildStyle(stack, currentObjectsFC(), currentDraftFC(), { trailOverlay }).then((style) => {
       if (cancelled || seq !== buildSeq.current) return;
       mapRef.current?.setStyle(style, { diff: true });
     });
     return () => {
       cancelled = true;
     };
-  }, [stack, sentinel]);
+  }, [stack, sentinel, trailOverlay]);
 
   return (
     <div className="relative h-dvh w-full">
       {/* Explicit h/w: maplibre's stylesheet forces position:relative on this
           div, so absolute-positioning classes can't size it. */}
       <div ref={containerRef} className="h-full w-full" />
-      <div className="absolute left-1/2 top-2 flex -translate-x-1/2 items-start gap-2">
+      {/* Mobile: vertical stack on the right, clear of the top corner
+          dropdowns. sm: and up: horizontal, top-center (original layout). */}
+      <div className="absolute right-2 top-20 z-10 flex flex-col items-end gap-2 sm:left-1/2 sm:right-auto sm:top-2 sm:flex-row sm:items-start sm:-translate-x-1/2">
         <Toolbar />
         <SearchBox />
       </div>

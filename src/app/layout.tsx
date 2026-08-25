@@ -1,5 +1,6 @@
-import type { Metadata } from "next";
+import type { Metadata, Viewport } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import ServiceWorkerRegister from "@/components/ServiceWorkerRegister";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -15,6 +16,11 @@ const geistMono = Geist_Mono({
 export const metadata: Metadata = {
   title: "rexMaps",
   description: "Personal backcountry mapping — routes, layers, research",
+  appleWebApp: { title: "rexMaps", statusBarStyle: "default" },
+};
+
+export const viewport: Viewport = {
+  themeColor: "#047857",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {
@@ -26,7 +32,10 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       // data-js-focus-visible) before hydration; only this element is exempted.
       suppressHydrationWarning
     >
-      <body className="h-dvh overflow-hidden overscroll-none">{children}</body>
+      <body className="h-dvh overflow-hidden overscroll-none">
+        {children}
+        <ServiceWorkerRegister />
+      </body>
     </html>
   );
 }

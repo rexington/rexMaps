@@ -143,7 +143,7 @@ export default function ObjectsPanel() {
   const dirty = useMapStore((s) => s.dirty);
   const { setTitle, newMap, loadMap, markSaved, importObjects } = useMapStore();
 
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
   const [savedList, setSavedList] = useState<SavedMapSummary[] | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
@@ -232,9 +232,11 @@ export default function ObjectsPanel() {
     "rounded-md bg-white px-2 py-1 text-xs font-medium text-gray-700 shadow-sm border border-gray-200 hover:border-emerald-600 hover:text-emerald-800 disabled:opacity-40";
 
   return (
-    <div className="absolute left-2 top-14 w-72 max-w-[calc(100vw-1rem)] select-none">
-      {/* top-14, not top-2: clears the centered Toolbar/SearchBox row so an
-          expanded panel can't overlap the map tools at narrower widths. */}
+    <div className="absolute left-2 top-2 z-10 w-72 max-w-[calc(100vw-1rem)] select-none sm:top-14">
+      {/* sm:top-14, not top-2: on desktop this clears the centered
+          Toolbar/SearchBox row so an expanded panel can't overlap the map
+          tools; on mobile the toolbar moves off to the right instead, so
+          top-2 is free. */}
       <button
         onClick={() => setOpen((o) => !o)}
         className="mb-1 rounded-md bg-white/95 px-3 py-1.5 text-sm font-semibold text-emerald-900 shadow"
@@ -242,7 +244,7 @@ export default function ObjectsPanel() {
         rexMaps {open ? "▾" : "▸"}
       </button>
       {open && (
-        <div className="max-h-[calc(100dvh-8rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur">
+        <div className="max-h-[calc(100dvh-5rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur sm:max-h-[calc(100dvh-8rem)]">
           <div className="flex items-center gap-1.5">
             <input
               value={currentMap.title}

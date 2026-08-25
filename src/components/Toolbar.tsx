@@ -53,9 +53,10 @@ const TOOLS: { tool: Tool; label: string; icon: React.ReactNode; key: string }[]
 export default function Toolbar() {
   const tool = useMapStore((s) => s.tool);
   const setTool = useMapStore((s) => s.setTool);
-  // Positioned by MapView's top-center container (shared with SearchBox).
+  // Positioned by MapView's container (shared with SearchBox): a vertical
+  // stack on the right on mobile, horizontal top-center from sm: up.
   return (
-    <div className="flex overflow-hidden rounded-lg bg-white/95 shadow">
+    <div className="flex flex-col overflow-hidden rounded-lg bg-white/95 shadow sm:flex-row">
       {TOOLS.map(({ tool: t, label, icon, key }) => (
         <button
           key={key}
@@ -83,6 +84,7 @@ export function DrawHint() {
   const snapEnabled = useMapStore((s) => s.snapEnabled);
   const toggleSnap = useMapStore((s) => s.toggleSnap);
   const draftUndo = useMapStore((s) => s.draftUndo);
+  const draftFinish = useMapStore((s) => s.draftFinish);
   if (tool === "select") return null;
 
   let text: string;
@@ -94,11 +96,23 @@ export function DrawHint() {
     const cursorPath = draft ? (draftCursorPath(draft) ?? []) : [];
     const total = pathLength(committed) + pathLength(cursorPath);
     const dist = total > 0 ? ` · ${formatDistance(total)}` : "";
-    text = `Click to add points · Enter/double-click finishes · Backspace undoes · Esc cancels${dist}`;
+    // Enter/double-click still work (desktop shortcuts); the ✓ Finish chip
+    // below is the primary, tap-friendly way to complete on mobile.
+    text = `Click to add points · Backspace undoes · Esc cancels${dist}`;
   }
+  const minPoints = tool === "polygon" ? 3 : 2;
   return (
-    <div className="absolute left-1/2 top-14 flex -translate-x-1/2 items-center gap-2 rounded-full bg-gray-900/80 px-4 py-1.5 text-xs text-white shadow">
+    <div className="absolute bottom-6 left-2 right-16 z-10 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-2xl bg-gray-900/90 px-3 py-2 text-xs text-white shadow sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-14 sm:w-auto sm:max-w-none sm:-translate-x-1/2 sm:flex-nowrap sm:rounded-full sm:bg-gray-900/80 sm:px-4 sm:py-1.5">
       <span>{text}</span>
+      {draft && draft.waypoints.length >= minPoints && (
+        <button
+          onClick={draftFinish}
+          className="rounded-full bg-emerald-600 px-2 py-0.5 font-medium text-white hover:bg-emerald-500"
+          title="Finish (Enter)"
+        >
+          ✓ Finish
+        </button>
+      )}
       {draft && draft.waypoints.length > 0 && (
         <button
           onClick={draftUndo}

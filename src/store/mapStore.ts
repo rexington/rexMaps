@@ -19,6 +19,19 @@ export interface Viewport {
 
 export type Tool = "select" | "marker" | "line" | "polygon";
 
+export interface OfflinePackMeta {
+  id: string;
+  name: string;
+  bbox: [number, number, number, number];
+  zMin: number;
+  zMax: number;
+  layerIds: string[];
+  includeTerrain: boolean;
+  tileCount: number;
+  byteSize: number;
+  createdAt: number;
+}
+
 export interface Draft {
   /** Points the user clicked. */
   waypoints: LngLat[];
@@ -58,6 +71,16 @@ interface MapStore {
   // Saved-map tracking
   currentMap: { id: string | null; title: string };
   dirty: boolean;
+
+  // Offline areas (Stage 6b) — metadata only; tile bytes live in Cache Storage.
+  offlinePacks: OfflinePackMeta[];
+  addOfflinePack: (pack: OfflinePackMeta) => void;
+  renameOfflinePack: (id: string, name: string) => void;
+  /** Removes the pack from this list. Doesn't reclaim its tiles — see
+   * clearOfflineTiles() in lib/offline.ts, since tiles may be shared with
+   * other overlapping packs. */
+  removeOfflinePack: (id: string) => void;
+  clearOfflinePacks: () => void;
 
   setViewport: (v: Viewport) => void;
 
@@ -134,9 +157,20 @@ export const useMapStore = create<MapStore>()(
       sentinel: { days: 7, mode: "latest" },
       currentMap: { id: null, title: "Untitled map" },
       dirty: false,
+      offlinePacks: [],
 
       setSentinel: (patch) =>
         set((s) => ({ sentinel: { ...s.sentinel, ...patch } })),
+
+      addOfflinePack: (pack) =>
+        set((s) => ({ offlinePacks: [...s.offlinePacks, pack] })),
+      renameOfflinePack: (id, name) =>
+        set((s) => ({
+          offlinePacks: s.offlinePacks.map((p) => (p.id === id ? { ...p, name } : p)),
+        })),
+      removeOfflinePack: (id) =>
+        set((s) => ({ offlinePacks: s.offlinePacks.filter((p) => p.id !== id) })),
+      clearOfflinePacks: () => set({ offlinePacks: [] }),
 
       setViewport: (viewport) => set({ viewport }),
 
@@ -329,6 +363,7 @@ export const useMapStore = create<MapStore>()(
         sentinel: s.sentinel,
         currentMap: s.currentMap,
         dirty: s.dirty,
+        offlinePacks: s.offlinePacks,
       }),
       migrate: (persisted) => persisted as MapStore,
     },
