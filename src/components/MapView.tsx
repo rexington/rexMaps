@@ -31,11 +31,18 @@ import {
 import LayerPanel from "./LayerPanel";
 import ObjectsPanel from "./ObjectsPanel";
 import ProfilePanel from "./ProfilePanel";
+import SearchBox from "./SearchBox";
 import Toolbar, { DrawHint } from "./Toolbar";
+import { registerSentinelProtocol } from "@/lib/layers/sentinel";
+import { registerSlopeProtocol } from "@/lib/layers/slope";
 
 // Self-hosted worker (copied to public/ on postinstall) — Turbopack breaks
 // maplibre's own worker URL, which silently disables all vector tile loading.
 setWorkerUrl("/maplibre-gl-worker.mjs");
+// slope://terrarium/{z}/{x}/{y} tiles, computed client-side from the DEM.
+registerSlopeProtocol();
+// sentinel://tile/{z}/{x}/{y} — rewrites TILEMATRIX for the CDSE WMTS grid.
+registerSentinelProtocol();
 
 function currentObjectsFC() {
   const s = useMapStore.getState();
@@ -53,11 +60,21 @@ function setSourceData(map: MaplibreMap, id: string, data: ReturnType<typeof cur
   src?.setData(data);
 }
 
+// Pixel padding around click/hover points so thin lines are easier to grab
+// than their exact rendered width.
+const HIT_PAD = 4;
+function hitBox(point: MapMouseEvent["point"]): [[number, number], [number, number]] {
+  return [
+    [point.x - HIT_PAD, point.y - HIT_PAD],
+    [point.x + HIT_PAD, point.y + HIT_PAD],
+  ];
+}
+
 /** Topmost drawn object at a screen point (markers beat lines beat polygons). */
 function hitTest(map: MaplibreMap, point: MapMouseEvent["point"]): string | null {
   const rank = { marker: 0, line: 1, polygon: 2 } as Record<string, number>;
   const hits = map
-    .queryRenderedFeatures(point)
+    .queryRenderedFeatures(hitBox(point))
     .filter((f) => f.source === OBJECTS_SOURCE && !f.properties?.handle)
     .sort((a, b) => (rank[a.properties?.kind] ?? 9) - (rank[b.properties?.kind] ?? 9));
   return (hits[0]?.properties?.id as string | undefined) ?? null;
@@ -79,6 +96,7 @@ export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const buildSeq = useRef(0);
   const stack = useMapStore((s) => s.stack);
+  const sentinel = useMapStore((s) => s.sentinel);
 
   // Init once.
   useEffect(() => {
@@ -239,7 +257,8 @@ export default function MapView() {
     };
   }, []);
 
-  // Rebuild style whenever the layer stack changes (embeds current object data).
+  // Rebuild style whenever the layer stack (or Sentinel options, which change
+  // that layer's tile URLs) changes; embeds current object data.
   useEffect(() => {
     const seq = ++buildSeq.current;
     let cancelled = false;
@@ -250,14 +269,17 @@ export default function MapView() {
     return () => {
       cancelled = true;
     };
-  }, [stack]);
+  }, [stack, sentinel]);
 
   return (
     <div className="relative h-dvh w-full">
       {/* Explicit h/w: maplibre's stylesheet forces position:relative on this
           div, so absolute-positioning classes can't size it. */}
       <div ref={containerRef} className="h-full w-full" />
-      <Toolbar />
+      <div className="absolute left-1/2 top-2 flex -translate-x-1/2 items-start gap-2">
+        <Toolbar />
+        <SearchBox />
+      </div>
       <DrawHint />
       <ObjectsPanel />
       <LayerPanel />

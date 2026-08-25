@@ -4,6 +4,9 @@ import { useRef, useState } from "react";
 import { formatDistance } from "@/lib/geo";
 import { mapRef } from "@/lib/mapRef";
 import {
+  DEFAULT_LINE_WIDTH,
+  MAX_LINE_WIDTH,
+  MIN_LINE_WIDTH,
   OBJECT_COLORS,
   objectBounds,
   objectLength,
@@ -86,9 +89,29 @@ function ObjectRow({ obj }: { obj: MapObject }) {
           <input
             value={obj.title}
             onChange={(e) => updateObject(obj.id, { title: e.target.value })}
-            className="w-full rounded border border-gray-300 px-2 py-1 text-sm"
+            className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900"
             aria-label="Object title"
           />
+          {obj.kind === "line" && (
+            <div className="flex items-center gap-2">
+              <label htmlFor={`width-${obj.id}`} className="text-xs text-gray-500">
+                Width
+              </label>
+              <input
+                id={`width-${obj.id}`}
+                type="range"
+                min={MIN_LINE_WIDTH}
+                max={MAX_LINE_WIDTH}
+                value={obj.width ?? DEFAULT_LINE_WIDTH}
+                onChange={(e) => updateObject(obj.id, { width: Number(e.target.value) })}
+                className="h-1 flex-1 accent-emerald-700"
+                aria-label="Line width"
+              />
+              <span className="w-6 text-right text-xs tabular-nums text-gray-500">
+                {obj.width ?? DEFAULT_LINE_WIDTH}
+              </span>
+            </div>
+          )}
           <div className="flex items-center gap-1.5">
             {OBJECT_COLORS.map((c) => (
               <button
@@ -209,7 +232,9 @@ export default function ObjectsPanel() {
     "rounded-md bg-white px-2 py-1 text-xs font-medium text-gray-700 shadow-sm border border-gray-200 hover:border-emerald-600 hover:text-emerald-800 disabled:opacity-40";
 
   return (
-    <div className="absolute left-2 top-2 w-72 max-w-[calc(100vw-1rem)] select-none">
+    <div className="absolute left-2 top-14 w-72 max-w-[calc(100vw-1rem)] select-none">
+      {/* top-14, not top-2: clears the centered Toolbar/SearchBox row so an
+          expanded panel can't overlap the map tools at narrower widths. */}
       <button
         onClick={() => setOpen((o) => !o)}
         className="mb-1 rounded-md bg-white/95 px-3 py-1.5 text-sm font-semibold text-emerald-900 shadow"
@@ -217,7 +242,7 @@ export default function ObjectsPanel() {
         rexMaps {open ? "▾" : "▸"}
       </button>
       {open && (
-        <div className="max-h-[calc(100dvh-5rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur">
+        <div className="max-h-[calc(100dvh-8rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur">
           <div className="flex items-center gap-1.5">
             <input
               value={currentMap.title}

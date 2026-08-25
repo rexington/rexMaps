@@ -21,6 +21,8 @@ export interface MapObject {
   waypoints?: LngLat[];
   legs?: LngLat[][];
   snapped?: boolean[];
+  /** Rendered line width in px (kind "line" only). Undefined = DEFAULT_LINE_WIDTH. */
+  width?: number;
 }
 
 export interface LineTopology {
@@ -65,6 +67,11 @@ export const OBJECT_COLORS = [
 
 export const DEFAULT_COLOR: string = OBJECT_COLORS[0];
 
+// Base (unselected) line render width in px; selected lines render 1px wider.
+export const DEFAULT_LINE_WIDTH = 4;
+export const MIN_LINE_WIDTH = 1;
+export const MAX_LINE_WIDTH = 10;
+
 export function newObject(
   kind: MapObject["kind"],
   coords: LngLat[],
@@ -77,6 +84,7 @@ export function newObject(
     title: `${names[kind]} ${existingCount + 1}`,
     color: DEFAULT_COLOR,
     coords,
+    ...(kind === "line" ? { width: DEFAULT_LINE_WIDTH } : {}),
   };
 }
 
@@ -110,6 +118,7 @@ export function objectsToFeatureCollection(
       id: obj.id,
       kind: obj.kind,
       color: obj.color,
+      width: obj.width ?? DEFAULT_LINE_WIDTH,
       selected: obj.id === selectedId,
     },
   }));

@@ -75,6 +75,23 @@ export interface ElevationProfile {
   lossM: number;
   minEle: number;
   maxEle: number;
+  /** Steepest sustained grade (%), measured over ~60–120 m windows. */
+  maxGradePct: number;
+}
+
+/** Steepest sustained |grade| over windows of 60–120 m (smoothed elevations). */
+function maxGrade(points: ProfilePoint[], smooth: number[]): number {
+  let max = 0;
+  let j = 0;
+  for (let i = 1; i < points.length; i++) {
+    while (points[i].dist - points[j].dist > 120) j++;
+    for (let k = j; k < i; k++) {
+      const d = points[i].dist - points[k].dist;
+      if (d < 60) break; // closer samples are inside the window minimum
+      max = Math.max(max, Math.abs(smooth[i] - smooth[k]) / d);
+    }
+  }
+  return Math.round(max * 100);
 }
 
 /** Evenly resample a path, keeping cumulative distances. */
@@ -147,5 +164,6 @@ export async function elevationProfile(
     lossM,
     minEle: Math.min(...points.map((p) => p.ele)),
     maxEle: Math.max(...points.map((p) => p.ele)),
+    maxGradePct: maxGrade(points, smooth),
   };
 }

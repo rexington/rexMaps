@@ -1,6 +1,12 @@
 import type { FeatureCollection, Position } from "geojson";
 import type { LngLat } from "./geo";
-import { newObject, objectGeometry, type MapObject } from "./objects";
+import {
+  MAX_LINE_WIDTH,
+  MIN_LINE_WIDTH,
+  newObject,
+  objectGeometry,
+  type MapObject,
+} from "./objects";
 
 /** ---------- Export ---------- */
 
@@ -36,7 +42,12 @@ export function toGeoJSON(objects: MapObject[]): FeatureCollection {
     features: objects.map((o) => ({
       type: "Feature",
       geometry: objectGeometry(o),
-      properties: { title: o.title, color: o.color, kind: o.kind },
+      properties: {
+        title: o.title,
+        color: o.color,
+        kind: o.kind,
+        ...(o.width !== undefined ? { width: o.width } : {}),
+      },
     })),
   };
 }
@@ -88,7 +99,12 @@ function parseGeoJSON(text: string, startCount: number): MapObject[] {
   const toLngLat = (c: Position): LngLat => [c[0], c[1]];
 
   for (const f of data.features) {
-    const props = (f.properties ?? {}) as { title?: string; name?: string; color?: string };
+    const props = (f.properties ?? {}) as {
+      title?: string;
+      name?: string;
+      color?: string;
+      width?: number;
+    };
     const geoms = f.geometry?.type === "GeometryCollection" ? f.geometry.geometries : [f.geometry];
     for (const g of geoms) {
       if (!g) continue;
@@ -124,6 +140,13 @@ function parseGeoJSON(text: string, startCount: number): MapObject[] {
         if (props.title || props.name) obj.title = (props.title ?? props.name)!;
         if (typeof props.color === "string" && /^#[0-9a-f]{6}$/i.test(props.color))
           obj.color = props.color;
+        if (
+          obj.kind === "line" &&
+          typeof props.width === "number" &&
+          props.width >= MIN_LINE_WIDTH &&
+          props.width <= MAX_LINE_WIDTH
+        )
+          obj.width = props.width;
         out.push(obj);
       }
     }

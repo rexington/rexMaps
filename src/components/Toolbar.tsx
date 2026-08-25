@@ -53,8 +53,9 @@ const TOOLS: { tool: Tool; label: string; icon: React.ReactNode; key: string }[]
 export default function Toolbar() {
   const tool = useMapStore((s) => s.tool);
   const setTool = useMapStore((s) => s.setTool);
+  // Positioned by MapView's top-center container (shared with SearchBox).
   return (
-    <div className="absolute left-1/2 top-2 flex -translate-x-1/2 overflow-hidden rounded-lg bg-white/95 shadow">
+    <div className="flex overflow-hidden rounded-lg bg-white/95 shadow">
       {TOOLS.map(({ tool: t, label, icon, key }) => (
         <button
           key={key}

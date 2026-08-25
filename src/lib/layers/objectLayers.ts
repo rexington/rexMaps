@@ -20,6 +20,7 @@ export const EMPTY_FC: FeatureCollection = {
 };
 
 const color = ["get", "color"];
+const lineWidth = ["get", "width"];
 const ifSelected = (yes: unknown, no: unknown) =>
   ["case", ["==", ["get", "selected"], true], yes, no];
 
@@ -61,7 +62,11 @@ export function objectStyleParts(
         ["==", ["get", "selected"], true],
       ],
       layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": "#ffffff", "line-width": 7, "line-opacity": 0.9 },
+      paint: {
+        "line-color": "#ffffff",
+        "line-width": ["+", lineWidth, 4],
+        "line-opacity": 0.9,
+      },
     },
     {
       id: "obj-line",
@@ -69,7 +74,10 @@ export function objectStyleParts(
       source: OBJECTS_SOURCE,
       filter: ["==", ["get", "kind"], "line"],
       layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": color, "line-width": ifSelected(4, 3) },
+      paint: {
+        "line-color": color,
+        "line-width": ifSelected(["+", lineWidth, 1], lineWidth),
+      },
     },
     {
       id: "obj-marker-halo",

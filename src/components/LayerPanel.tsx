@@ -14,15 +14,118 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { googleApiKey } from "@/lib/layers/google";
 import { LAYER_DEFS, layerDef } from "@/lib/layers/registry";
+import {
+  sentinelInstanceId,
+  sentinelScenes,
+  type SentinelScene,
+} from "@/lib/layers/sentinel";
 import type { ActiveLayer, LayerDef } from "@/lib/layers/types";
+import { mapRef } from "@/lib/mapRef";
 import { useMapStore } from "@/store/mapStore";
 
-function needsMissingGoogleKey(def: LayerDef) {
+/** Why this layer can't be enabled yet (missing credential), or null. */
+function missingKeyReason(def: LayerDef): string | null {
+  if (def.kind !== "raster") return null;
+  if (def.tiles === "google-session" && !googleApiKey())
+    return "Set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to enable";
+  if (def.tiles === "sentinel-cdse" && !sentinelInstanceId())
+    return "Set NEXT_PUBLIC_SENTINEL_INSTANCE_ID to enable";
+  return null;
+}
+
+const dayFmt = new Intl.DateTimeFormat("en-US", {
+  month: "short",
+  day: "numeric",
+  timeZone: "UTC",
+});
+
+/** "Aug 24 (today) · ~25% clouds" for the pass the current mode would show. */
+function sceneLabel(scenes: SentinelScene[], mode: "latest" | "clearest") {
+  if (scenes.length === 0) return "No passes in this window";
+  const s =
+    mode === "clearest"
+      ? scenes.reduce((a, b) => (b.cloud < a.cloud ? b : a))
+      : scenes[0]; // newest first
+  const when = new Date(`${s.date}T12:00:00Z`);
+  const daysAgo = Math.floor((Date.now() - when.getTime()) / 86400_000);
+  const ago = daysAgo <= 0 ? "today" : daysAgo === 1 ? "1d ago" : `${daysAgo}d ago`;
+  return `${dayFmt.format(when)} (${ago}) · ~${Math.round(s.cloud)}% clouds`;
+}
+
+/** Extra controls on the Sentinel-2 row: lookback window + mosaic priority. */
+function SentinelControls() {
+  const sentinel = useMapStore((s) => s.sentinel);
+  const setSentinel = useMapStore((s) => s.setSentinel);
+  const viewport = useMapStore((s) => s.viewport);
+  const [scenes, setScenes] = useState<SentinelScene[] | null>(null);
+
+  // Acquisition dates for the current view (WFS; cached per area+window).
+  useEffect(() => {
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      // Read-only camera state; fall back to a box around the stored center.
+      const b = mapRef.current?.getBounds();
+      const bbox: [number, number, number, number] = b
+        ? [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()]
+        : [viewport.lng - 0.5, viewport.lat - 0.4, viewport.lng + 0.5, viewport.lat + 0.4];
+      try {
+        const list = await sentinelScenes(bbox, sentinel.days);
+        if (!cancelled) setScenes(list);
+      } catch {
+        if (!cancelled) setScenes(null);
+      }
+    }, 500);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [viewport, sentinel.days]);
+
+  const sel =
+    "rounded border border-gray-300 bg-white px-1 py-0.5 text-xs text-gray-700";
   return (
-    def.kind === "raster" && def.tiles === "google-session" && !googleApiKey()
+    <div className="mt-1 space-y-1 pl-6">
+      <div className="flex items-center gap-2">
+        <select
+          value={sentinel.days}
+          onChange={(e) => setSentinel({ days: Number(e.target.value) })}
+          className={sel}
+          aria-label="Sentinel lookback window"
+        >
+          <option value={7}>Last 7 days</option>
+          <option value={14}>Last 14 days</option>
+          <option value={30}>Last 30 days</option>
+        </select>
+        <select
+          value={sentinel.mode}
+          onChange={(e) =>
+            setSentinel({ mode: e.target.value as "latest" | "clearest" })
+          }
+          className={sel}
+          aria-label="Sentinel mosaic priority"
+        >
+          <option value="latest">Latest pass</option>
+          <option value="clearest">Least clouds</option>
+        </select>
+      </div>
+      {scenes && (
+        <p
+          className="text-xs text-gray-500"
+          title={
+            scenes.length
+              ? `Passes over this view: ${scenes
+                  .map((s) => `${s.date} (~${Math.round(s.cloud)}% clouds)`)
+                  .join(", ")}`
+              : undefined
+          }
+        >
+          Showing: {sceneLabel(scenes, sentinel.mode)}
+        </p>
+      )}
+    </div>
   );
 }
 
@@ -90,6 +193,7 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
           {Math.round(entry.opacity * 100)}%
         </span>
       </div>
+      {entry.defId === "sentinel-s2" && <SentinelControls />}
     </li>
   );
 }
@@ -121,7 +225,9 @@ export default function LayerPanel() {
   const overlays = available.filter((d) => d.category === "overlay");
 
   return (
-    <div className="absolute right-2 top-2 w-72 max-w-[calc(100vw-1rem)] select-none">
+    <div className="absolute right-2 top-14 w-72 max-w-[calc(100vw-1rem)] select-none">
+      {/* top-14, not top-2: clears the centered Toolbar/SearchBox row so an
+          expanded panel can't overlap the map tools at narrower widths. */}
       <button
         onClick={() => setOpen((o) => !o)}
         className="mb-1 ml-auto block rounded-md bg-white/95 px-3 py-1.5 text-sm font-medium text-gray-800 shadow"
@@ -129,7 +235,7 @@ export default function LayerPanel() {
         {open ? "Layers ▾" : "Layers ▸"}
       </button>
       {open && (
-        <div className="max-h-[calc(100dvh-5rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur">
+        <div className="max-h-[calc(100dvh-8rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -164,17 +270,13 @@ export default function LayerPanel() {
                   </h3>
                   <ul className="space-y-1">
                     {defs.map((def) => {
-                      const noKey = needsMissingGoogleKey(def);
+                      const noKey = missingKeyReason(def);
                       return (
                         <li key={def.id}>
                           <button
                             onClick={() => addLayer(def.id)}
-                            disabled={noKey}
-                            title={
-                              noKey
-                                ? "Set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to enable"
-                                : def.description
-                            }
+                            disabled={!!noKey}
+                            title={noKey ?? def.description}
                             className="w-full rounded-md border border-dashed border-gray-300 bg-white px-2 py-1.5 text-left text-sm text-gray-700 hover:border-emerald-600 hover:text-emerald-800 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             + {def.name}

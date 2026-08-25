@@ -51,6 +51,10 @@ interface MapStore {
   /** Snap line legs to known trails/paths (BRouter) while drawing. */
   snapEnabled: boolean;
 
+  /** Sentinel-2 layer options (lookback window + mosaic priority). */
+  sentinel: { days: number; mode: "latest" | "clearest" };
+  setSentinel: (patch: Partial<MapStore["sentinel"]>) => void;
+
   // Saved-map tracking
   currentMap: { id: string | null; title: string };
   dirty: boolean;
@@ -79,7 +83,9 @@ interface MapStore {
   setSelected: (id: string | null) => void;
   updateObject: (
     id: string,
-    patch: Partial<Pick<MapObject, "title" | "color" | "coords" | "waypoints" | "legs" | "snapped">>,
+    patch: Partial<
+      Pick<MapObject, "title" | "color" | "width" | "coords" | "waypoints" | "legs" | "snapped">
+    >,
   ) => void;
   removeObject: (id: string) => void;
   importObjects: (objects: MapObject[]) => void;
@@ -125,8 +131,12 @@ export const useMapStore = create<MapStore>()(
       tool: "select",
       draft: null,
       snapEnabled: true,
+      sentinel: { days: 7, mode: "latest" },
       currentMap: { id: null, title: "Untitled map" },
       dirty: false,
+
+      setSentinel: (patch) =>
+        set((s) => ({ sentinel: { ...s.sentinel, ...patch } })),
 
       setViewport: (viewport) => set({ viewport }),
 
@@ -144,10 +154,11 @@ export const useMapStore = create<MapStore>()(
             : [...s.stack];
           // Vector layers are backgrounds by nature — insert at the bottom;
           // rasters go on top where the user can immediately see them.
+          const opacity = def.defaultOpacity ?? 1;
           if (isVectorKind(def)) {
-            stack.unshift({ defId, visible: true, opacity: 1 });
+            stack.unshift({ defId, visible: true, opacity });
           } else {
-            stack.push({ defId, visible: true, opacity: 1 });
+            stack.push({ defId, visible: true, opacity });
           }
           return { stack, dirty: true };
         }),
@@ -315,6 +326,7 @@ export const useMapStore = create<MapStore>()(
         stack: s.stack,
         objects: s.objects,
         snapEnabled: s.snapEnabled,
+        sentinel: s.sentinel,
         currentMap: s.currentMap,
         dirty: s.dirty,
       }),

@@ -132,6 +132,9 @@ export default function ProfilePanel() {
               <span className="text-emerald-700">+{ft(profile.gainM).toLocaleString()} ft</span>
               {" / "}
               <span className="text-red-700">−{ft(profile.lossM).toLocaleString()} ft</span>
+              {" · "}
+              {ft(profile.minEle).toLocaleString()}–{ft(profile.maxEle).toLocaleString()} ft
+              {profile.maxGradePct > 0 && ` · ≤${profile.maxGradePct}% grade`}
             </>
           )}
         </span>

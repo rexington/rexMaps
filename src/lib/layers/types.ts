@@ -10,12 +10,15 @@ interface LayerDefBase {
   minzoom?: number;
   /** Max native zoom; MapLibre overzooms beyond this. */
   maxzoom?: number;
+  /** Opacity applied when the layer is added to the stack (default 1). */
+  defaultOpacity?: number;
 }
 
 export interface RasterLayerDef extends LayerDefBase {
   kind: "raster";
-  /** XYZ template URLs, or "google-session" (resolved at runtime via Map Tiles API). */
-  tiles: string[] | "google-session";
+  /** XYZ template URLs, or a token resolved at runtime by the compositor:
+   * "google-session" (Map Tiles API) / "sentinel-cdse" (Copernicus WMTS). */
+  tiles: string[] | "google-session" | "sentinel-cdse";
   googleMapType?: "satellite" | "roadmap";
   tileSize?: number;
 }

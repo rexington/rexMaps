@@ -5,6 +5,7 @@ import { googleTileUrls } from "./google";
 import { EMPTY_FC, objectStyleParts } from "./objectLayers";
 import { applyGroupOpacity } from "./opacity";
 import { layerDef } from "./registry";
+import { sentinelSource } from "./sentinel";
 import type { ActiveLayer, RasterLayerDef } from "./types";
 
 /**
@@ -23,9 +24,15 @@ async function rasterEntry(
   entry: ActiveLayer,
 ): Promise<{ source: object; layer: object } | null> {
   let tiles: string[] | null;
+  let tileSize = def.tileSize ?? 256;
   if (def.tiles === "google-session") {
     tiles = await googleTileUrls(def.googleMapType ?? "satellite");
     if (!tiles) return null; // no API key configured — skip silently
+  } else if (def.tiles === "sentinel-cdse") {
+    const src = await sentinelSource();
+    if (!src) return null; // no instance ID configured — skip silently
+    tiles = src.tiles;
+    tileSize = src.tileSize;
   } else {
     tiles = def.tiles;
   }
@@ -33,7 +40,7 @@ async function rasterEntry(
     source: {
       type: "raster",
       tiles,
-      tileSize: def.tileSize ?? 256,
+      tileSize,
       ...(def.attribution ? { attribution: def.attribution } : {}),
       ...(def.minzoom !== undefined ? { minzoom: def.minzoom } : {}),
       ...(def.maxzoom !== undefined ? { maxzoom: def.maxzoom } : {}),

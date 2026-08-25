@@ -83,6 +83,31 @@ export const LAYER_DEFS: LayerDef[] = [
     attribution: "USDA Forest Service",
   },
   {
+    id: "sentinel-s2",
+    kind: "raster",
+    name: "Sentinel-2 Recent",
+    description:
+      "Latest Sentinel-2 pass via Copernicus Data Space (needs instance ID)",
+    category: "base",
+    tiles: "sentinel-cdse",
+    attribution: "Contains modified Copernicus Sentinel data",
+    // 512px tile z13 → WMTS matrix 14 ≈ Sentinel-2's native 10 m; overzoom above.
+    maxzoom: 13,
+  },
+  {
+    id: "slope-angle",
+    kind: "raster",
+    name: "Slope Angle Shading",
+    description:
+      "27°+ slope bands computed from Terrarium DEM (avalanche-style ramp)",
+    category: "overlay",
+    tiles: ["slope://terrarium/{z}/{x}/{y}"],
+    attribution: "Slope: Mapzen Terrarium DEM",
+    minzoom: 10,
+    maxzoom: 14,
+    defaultOpacity: 0.7,
+  },
+  {
     id: "esri-hillshade",
     kind: "raster",
     name: "Shaded Relief",
