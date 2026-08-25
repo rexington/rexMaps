@@ -1,0 +1,6 @@
+# Copy to .dev.vars for local development (gitignored).
+NEXTJS_ENV=development
+
+# Google Map Tiles API key (Stage 1b, optional — Google layers hide when unset).
+# Create at console.cloud.google.com: enable "Map Tiles API", key-restrict to it.
+GOOGLE_MAPS_API_KEY=

@@ -1,0 +1,30 @@
+{
+	"$schema": "node_modules/wrangler/config-schema.json",
+	"name": "rexmaps",
+	"main": ".open-next/worker.js",
+	"compatibility_date": "2026-08-01",
+	"compatibility_flags": ["nodejs_compat", "global_fetch_strictly_public"],
+	"assets": {
+		"directory": ".open-next/assets",
+		"binding": "ASSETS"
+	},
+	"services": [
+		{
+			"binding": "WORKER_SELF_REFERENCE",
+			"service": "rexmaps"
+		}
+	],
+	"observability": {
+		"enabled": true
+	},
+	// Saved maps. Local dev uses Miniflare's local D1 (the id is ignored);
+	// the id below is the real remote database (created 2026-08-24).
+	"d1_databases": [
+		{
+			"binding": "DB",
+			"database_name": "rexmaps",
+			"database_id": "e3b6d9cf-4dde-4a9b-91a2-e49c6418006d",
+			"migrations_dir": "migrations"
+		}
+	]
+}
