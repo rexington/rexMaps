@@ -21,8 +21,14 @@ export interface MapObject {
   waypoints?: LngLat[];
   legs?: LngLat[][];
   snapped?: boolean[];
-  /** Rendered line width in px (kind "line" only). Undefined = DEFAULT_LINE_WIDTH. */
+  /** Stroke width in px (kind "line"/"polygon"). Undefined = DEFAULT_LINE_WIDTH. */
   width?: number;
+  /** Fill/stroke opacity, 0-1, all kinds. Undefined = DEFAULT_OPACITY. */
+  opacity?: number;
+  /** Marker glyph id from MARKER_ICONS (kind "marker" only). Undefined = DEFAULT_MARKER_ICON. */
+  icon?: string;
+  /** Marker badge radius in px (kind "marker" only). Undefined = DEFAULT_MARKER_SIZE. */
+  size?: number;
 }
 
 export interface LineTopology {
@@ -67,10 +73,21 @@ export const OBJECT_COLORS = [
 
 export const DEFAULT_COLOR: string = OBJECT_COLORS[0];
 
-// Base (unselected) line render width in px; selected lines render 1px wider.
+// Base (unselected) stroke width in px (lines + polygon outlines); selected
+// objects render 1px wider.
 export const DEFAULT_LINE_WIDTH = 4;
 export const MIN_LINE_WIDTH = 1;
 export const MAX_LINE_WIDTH = 10;
+
+export const DEFAULT_OPACITY = 1;
+
+export const DEFAULT_MARKER_ICON = "dot";
+// Base (unselected) marker badge radius in px; selected markers render 1.5px
+// larger. Bigger than the old plain-dot default (was 6.5) — a pictographic
+// icon needs more pixels to actually read as its glyph, not just a blob.
+export const DEFAULT_MARKER_SIZE = 11;
+export const MIN_MARKER_SIZE = 6;
+export const MAX_MARKER_SIZE = 20;
 
 export function newObject(
   kind: MapObject["kind"],
@@ -84,7 +101,9 @@ export function newObject(
     title: `${names[kind]} ${existingCount + 1}`,
     color: DEFAULT_COLOR,
     coords,
-    ...(kind === "line" ? { width: DEFAULT_LINE_WIDTH } : {}),
+    opacity: DEFAULT_OPACITY,
+    ...(kind === "line" || kind === "polygon" ? { width: DEFAULT_LINE_WIDTH } : {}),
+    ...(kind === "marker" ? { icon: DEFAULT_MARKER_ICON, size: DEFAULT_MARKER_SIZE } : {}),
   };
 }
 
@@ -119,6 +138,9 @@ export function objectsToFeatureCollection(
       kind: obj.kind,
       color: obj.color,
       width: obj.width ?? DEFAULT_LINE_WIDTH,
+      opacity: obj.opacity ?? DEFAULT_OPACITY,
+      icon: obj.icon ?? DEFAULT_MARKER_ICON,
+      size: obj.size ?? DEFAULT_MARKER_SIZE,
       selected: obj.id === selectedId,
     },
   }));

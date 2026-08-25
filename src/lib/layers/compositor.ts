@@ -1,5 +1,6 @@
 import type { FeatureCollection } from "geojson";
 import type { StyleSpecification } from "maplibre-gl";
+import { customOverlayStyleParts, type CustomOverlayDef } from "./customOverlay";
 import { getFragment } from "./fragments";
 import { googleTileUrls } from "./google";
 import { EMPTY_FC, objectStyleParts } from "./objectLayers";
@@ -59,7 +60,7 @@ export async function buildStyle(
   stack: ActiveLayer[],
   objectsData: FeatureCollection = EMPTY_FC,
   draftData: FeatureCollection = EMPTY_FC,
-  options: { trailOverlay?: boolean } = {},
+  options: { trailOverlay?: boolean; customOverlays?: CustomOverlayDef[] } = {},
 ): Promise<StyleSpecification> {
   const style: StyleSpecification = {
     version: 8,
@@ -77,7 +78,19 @@ export async function buildStyle(
   for (const entry of stack) {
     if (!entry.visible || entry.opacity === 0) continue;
     const def = layerDef(entry.defId);
-    if (!def) continue;
+
+    if (!def) {
+      // Not a static registry layer — maybe a user-defined custom overlay.
+      // Its actual feature data arrives later via setData, same as the
+      // objects/draft sources below — this only seeds an empty source +
+      // the style layers so that setData has somewhere to land.
+      const custom = options.customOverlays?.find((c) => c.id === entry.defId);
+      if (!custom) continue;
+      const parts = customOverlayStyleParts(custom, entry.opacity);
+      Object.assign(style.sources, parts.sources);
+      style.layers.push(...parts.layers);
+      continue;
+    }
 
     try {
       if (def.kind === "raster") {

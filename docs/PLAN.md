@@ -374,29 +374,159 @@ isn't mapped).
   OpenFreeMap layer in the stack at all): the ski area's road/trail network
   renders clearly as a dashed blue overlay directly on the satellite imagery.
 
+### Object opacity/width/icons + line simplification (done 2026-08-25)
+Backlog items 1, 3, 4, picked as a batch (next planned: item 7, 3D terrain).
+
+- **Per-object opacity + width/size** (`objects.ts`): `MapObject.opacity` (0-1,
+  all kinds), `width` now also applies to polygon outlines (was line-only),
+  new `size` for markers (badge radius). All follow the width-field precedent
+  from Stage 3: a property with a `DEFAULT_*` constant, missing on
+  old/imported objects falls back at render time — no migration needed.
+  `objectLayers.ts` multiplies opacity into `fill-opacity` (polygon fill
+  already had a selected/unselected alpha; opacity scales that, doesn't
+  replace it) and sets `line-opacity`/`icon-opacity` directly elsewhere.
+- **Marker icons** (`src/lib/markerIcons.ts`): converts the marker layer from
+  a plain `circle` to a `symbol` layer. Icons are drawn client-side with
+  Canvas 2D (12 hand-coded glyphs: dot/star/camp/water/parking/summit/
+  viewpoint/photo/danger/food/campfire/flag) onto a colored circular badge —
+  no icon-font or SVG-sprite dependency. Registered with MapLibre's image
+  manager via `map.addImage()`, keyed `marker-icon:{icon}:{color}`; `ensureMarkerIcons()`
+  is called from three places in `MapView.tsx` (map init, after every
+  `setStyle`, and on any objects-array change) since runtime-added images
+  aren't guaranteed to survive a style rebuild and there's no single choke
+  point that covers "new marker drawn" + "icon/color edited" + "page just
+  loaded from persisted state" otherwise.
+  - **Gotcha**: `icon-size` on a symbol layer is a *scale factor* on the
+    image's native pixel size, not an absolute radius like `circle-radius`
+    was — `ICON_SCALE_DIAMETER` in `markerIcons.ts` is the reference to
+    divide into the desired on-screen diameter.
+  - **Found via screenshot, fixed via constant tuning**: the first render used
+    the old plain-dot default radius (6.5px) and the pictographic icons were
+    just illegible blobs at that size — a plain dot doesn't need pixels to
+    read, a mountain-peak glyph does. Bumped `DEFAULT_MARKER_SIZE` 6.5→11
+    (range 3–14 → 6–20). Old markers (no `size` field) render slightly bigger
+    now too — same accepted tradeoff as the Stage 3 line-width default bump.
+  - **Found via screenshot, fixed via redraw**: campfire and the water
+    droplet read as the same rounded blob at marker size; danger's
+    exclamation mark was too thin to see. Gave campfire a crossed-log base
+    (the silhouette alone wasn't enough) and bolded danger's stroke/mark.
+  - A large chunk of debugging time here was chasing a problem that turned
+    out to be in the *test script*, not the app: a 12-marker QA grid only
+    showed 6 markers, which looked exactly like a rendering bug. It was
+    degrees-per-pixel arithmetic at a given zoom being wrong, positioning
+    the other 6 off-canvas — confirmed via `map.project()` on all 12
+    coordinates, which showed negative/overflowing screen x. Worth
+    remembering: when only *some* of a repeated/generated set of map
+    features render, check the test's own coordinate math before suspecting
+    the styling code.
+- **Line simplification** (`src/lib/simplify.ts`): standard Ramer-Douglas-
+  Peucker with a meter tolerance (local equirectangular approximation for the
+  perpendicular-distance check — fine at trail scale). UI is a slider in the
+  selected-line editor (only shown above ~20 points), live-applies to the
+  actual object like every other slider in this app (color/width/opacity) —
+  no separate "confirm" step, consistent with there being no undo anywhere
+  else either. The "original" full-resolution coords are captured once when
+  the line is selected (component-local state), so the slider can be moved
+  up and down freely within that session; deselecting and reselecting later
+  starts from whatever the last session left behind, same limitation as
+  every other property edit in this app. Simplifying clears
+  `waypoints`/`legs`/`snapped` (the routing topology) — the result is a flat
+  polyline, same as an import; the UI caption says so.
+
+### Custom overlays — user-supplied WFS catalogs (done 2026-08-25)
+Backlog item 9. Scope note: originally floated as "arbitrary XYZ/WMS/GeoJSON
+source," but the actual ask (clarified mid-design) is narrower and more
+concrete — a generic connector for "someone runs a WFS server with a catalog
+of places" (SOTA summits was the illustrative example, not a literal target
+integration; **not** PAD-US/MVUM — see item 6, a separate thing). Esri
+FeatureServer support (the pattern proven to work for USFS/hillshade) was
+deliberately deferred — `protocol: "wfs"` is a field on the persisted def
+already, so adding it later needs no migration, just a second code path.
+
+- **`src/lib/layers/customOverlay.ts`**: `CustomOverlayDef` (id/name/url/
+  typeName/color/optional labelField), a WFS 2.0 GetFeature query builder, and
+  `customOverlayStyleParts()` — geometry-type-filtered style layers (fill/
+  line/circle + an optional text label layer for points, all sharing one
+  color) seeded onto an **empty** GeoJSON source. Actual feature data is never
+  part of the style — it arrives later via `setData()`, the same rule
+  drawn-objects/draft already follow, for the same reason: viewport-driven
+  data can't go through a style rebuild without refetching from scratch every
+  time.
+- **Bbox safety guard**: rather than trust a server to honor paging params,
+  every fetch requests one page and checks the actual count client-side —
+  under the cap (500) renders everything, over it renders **nothing** plus a
+  "zoom in" message. Verified this matters: a real request to CDSE's WFS with
+  `RESULTTYPE=hits` and `COUNT=3` both silently ignored (server returned all
+  matching features regardless), so a pre-flight count request would have
+  been theater. Confirmed live in-browser: patching `fetch` to return 600
+  features and forcing a refetch left the map's previous 94 real features
+  untouched and surfaced the error — never a truncated, silently-wrong set.
+- **Gotcha, found only by testing against a real server**: WFS 2.0's 5-part
+  `BBOX=w,s,e,n,CRS` form is valid per spec, but CDSE's own WFS (the one
+  `sentinel.ts` already talks to) rejects it outright — "Illegal BBOX
+  format." `SRSNAME=EPSG:4326` alone already disambiguates axis order
+  (confirmed lat-first, matching the existing Sentinel-scene lookup), so the
+  CRS suffix on BBOX is now left off entirely, matching the working query
+  `sentinelScenes()` already used. A curl-only check wouldn't have caught
+  this — curl doesn't enforce or reveal what a *browser* fetch would refuse
+  once real, and this bug was in the URL syntax, not CORS at all.
+- **Store**: `customOverlays[]` is persisted (localStorage) like
+  `offlinePacks` — device-local, deliberately **not** part of saved-map
+  documents (a shared/exported map referencing a custom overlay id the
+  loading device doesn't have just silently drops that layer, same as any
+  other stale reference). `customOverlayStatus` (loading/error per id) is
+  runtime-only. `addLayer()`/registry lookups now explicitly fall back from
+  the static `layerDef()` to the custom-overlay list at every call site that
+  needed it (`ActiveRow`, the stack-insert logic, the compositor) — checked
+  each one deliberately rather than adding one shared resolver, since two of
+  the five candidate call sites (offline eligibility, the base/overlay
+  catalog list) are supposed to keep ignoring custom overlays, not silently
+  handle them.
+- **MapView wiring**: refetch happens two ways — once right after
+  `map.setStyle()` (so a freshly-added overlay's empty source gets populated
+  immediately) and again, debounced, on viewport change (mirrors
+  `SentinelControls`' existing pattern). Deliberately **not** hosted inside
+  the LayerPanel/CustomOverlaySection component tree — LayerPanel defaults
+  closed since the mobile pass, and a layer's live data has to keep updating
+  while the panel is collapsed. Rendered as an always-mounted, UI-less
+  sibling in `MapView`'s own JSX instead.
+- **Click-to-inspect**: selecting nothing (no drawn object under the click)
+  falls through to a plain property-dump popup for whatever custom-overlay
+  feature is there — built with `textContent`, never `innerHTML`, since this
+  is the one place in the app that renders a third-party server's arbitrary
+  response data into the DOM. Verified end-to-end against real (messy)
+  Sentinel-scene metadata with no escaping bugs.
+- Verified live against the one real, CORS-open, already-credentialed WFS
+  endpoint in the codebase (CDSE, reused from the Sentinel feature — real
+  scene-footprint polygons render, opacity/hide/delete/status all work), plus
+  a synthetic point+label FeatureCollection to specifically cover the
+  SOTA-summit-shaped case (points with a name label) that endpoint doesn't
+  exercise.
+
 ## Backlog / ideas
-- **Line/track simplification** (route/track editing): reduce point count on
-  a line that has too many vertices (e.g. from a dense GPX import or a long
-  snapped route) — a Douglas-Peucker-style tolerance simplify, selected
-  object editor gets a "Simplify" action/slider. Needs to preserve routing
-  topology (`waypoints`/`legs`/`snapped`) sensibly, or fall back to
-  simplifying the flat `coords` for lines that predate routing.
-- Per-object opacity (drawn markers/lines/polygons — distinct from the
-  existing per-*layer* opacity sliders in LayerPanel). Extend adjustable width
-  to polygon outlines and marker size too (line width for the "line" kind
-  already shipped in Stage 4 — a slider in the selected-object editor).
-- Worker-proxy + R2/Cache tile caching for Sentinel (and other free layers) —
-  **only if the app goes multi-user**: quota is per CDSE instance ID, so shared
-  users need a shared cache (and it would hide the instance ID). Pointless at
-  single-user scale: ~1–2k of the 10k monthly requests used, and the rolling
-  TIME window makes recent-imagery tiles cache-hostile. Google tiles are
-  excluded regardless (ToS forbids caching/proxying).
-- Classic scanned FSTopo quads: self-host from USFS FSGeodata GeoTIFFs → PMTiles in R2.
-- MVUM (motor-vehicle use maps) + public land ownership (PAD-US/BLM) layers — the OnX Offroad direction.
-- Weather overlays (NOAA forecast grids), snow depth (SNODAS).
-- Map sharing / multi-user, live location sharing.
-- Printing to PDF at scale.
-- 3D terrain view (MapLibre terrain + Terrarium DEM).
+
+Ordered by rough lift, cheapest first, so it's easy to pick a next few. These
+are gut-check buckets, not estimates: **S** = follows a pattern already built
+in this app, low risk, roughly a session; **M** = real design decisions but
+bounded scope, roughly a session or two; **L** = a new subsystem, real
+data-sourcing/research risk, or multiple sessions.
+
+| # | Effort | Category | Item | Notes |
+|---|--------|----------|------|-------|
+| 1 | S | Drawing/Objects | ✅ Per-object opacity; adjustable width for polygon outlines + marker size | Done 2026-08-25 — see notes below |
+| 2 | S | Access | Google as a 2nd identity provider | For friends outside the `vokey.org` domain policy; needs a Google Cloud Console OAuth client (personal Gmail works, confirmed against current docs during Stage 5) |
+| 3 | M | Drawing/Objects | ✅ Line/track simplification | Done 2026-08-25 — see notes below |
+| 4 | M | Drawing/Objects | ✅ Marker styles — icon picker, CalTopo-style but better | Done 2026-08-25 — see notes below |
+| 5 | M | Saved maps | Folders for saved maps | New D1 table (`folders`) + API route + UI grouping in the saved-maps list — second table in the schema, first one was just `maps` |
+| 6 | M | Layers/Data | Public land ownership + MVUM (motor-vehicle use maps) overlays | PAD-US/BLM likely already have a free ArcGIS REST service — same registry pattern already used for USFS Basemap/hillshade, needs confirming |
+| 7 | M | Presentation | 3D terrain view | MapLibre has native `raster-dem` terrain support with an `encoding: "terrarium"` option — reuses the exact DEM tiles already fetched for elevation profiles/slope shading, mostly wiring rather than new data work |
+| 8 | M | Presentation | Printing to PDF at scale | Static canvas render + scale-accurate paper layout (map scale bars must stay correct at print DPI) |
+| 9 | L | Layers/Data | ✅ Custom overlays — user-supplied WFS point/line/polygon catalogs | Done 2026-08-25 — see notes below |
+| 10 | L | Layers/Data | Private land ownership (parcels) | No free unified national dataset — parcels are county-by-county, wildly inconsistent. May be better solved *by* item 9 (let Rex plug in his own county's GIS parcel service) than by rexMaps building/maintaining a national layer |
+| 11 | L | Layers/Data | Classic scanned FSTopo quads, self-hosted | Real data pipeline: georeferenced GeoTIFFs from USFS FSGeodata → PMTiles → R2, plus a new tile protocol to serve them (same shape as the `slope://`/`sentinel://` custom protocols) |
+| 12 | L | Layers/Data | Weather (NOAA forecast grids) + snow depth (SNODAS) overlays | Not simple XYZ tiles — GRIB/WMS sources likely need real conversion, unlike the ArcGIS-pattern layers above |
+| 13 | L | Collaboration | Map sharing / multi-user / live location sharing | Needs Durable Objects + WebSockets (worker-level Access 403s on WebSocket upgrades — see Stage 5 — so this hostname would need to switch to a classic hostname-scoped Access app); also revisits the current single-policy Auth model |
+| 14 | L (gated) | Infra | Worker-proxy + R2/Cache tile caching for Sentinel | **Only relevant if the app goes multi-user** — quota is per CDSE instance ID. Pointless solo: ~1–2k of the 10k monthly requests used, and the rolling `TIME` window makes recent-imagery tiles cache-hostile anyway. Google tiles excluded regardless (ToS forbids caching/proxying) |
 
 ## Decision log
 - **2026-08-24** Platform: Cloudflare Workers + OpenNext (user pref #1; free tier covers personal use). Scaffolded with create-next-app directly because C3's framework flow now insists on an interactive vinext/OpenNext prompt; OpenNext chosen deliberately (mature, well-documented).

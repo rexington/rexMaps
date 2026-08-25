@@ -1,18 +1,25 @@
 "use client";
 
-import { useRef, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { formatDistance } from "@/lib/geo";
+import { parseImport, toGPX, toGeoJSON } from "@/lib/gpx";
 import { mapRef } from "@/lib/mapRef";
+import { iconPreviewDataUrl, MARKER_ICONS } from "@/lib/markerIcons";
 import {
   DEFAULT_LINE_WIDTH,
+  DEFAULT_MARKER_ICON,
+  DEFAULT_MARKER_SIZE,
+  DEFAULT_OPACITY,
   MAX_LINE_WIDTH,
+  MAX_MARKER_SIZE,
   MIN_LINE_WIDTH,
+  MIN_MARKER_SIZE,
   OBJECT_COLORS,
   objectBounds,
   objectLength,
   type MapObject,
 } from "@/lib/objects";
-import { parseImport, toGPX, toGeoJSON } from "@/lib/gpx";
+import { simplifyPath } from "@/lib/simplify";
 import {
   createMap,
   deleteMap,
@@ -45,6 +52,99 @@ function zoomTo(obj: MapObject) {
   } else {
     map.fitBounds([b[0], b[1], b[2], b[3]], { padding: 80, maxZoom: 15 });
   }
+}
+
+type UpdateObjectFn = (
+  id: string,
+  patch: Partial<
+    Pick<
+      MapObject,
+      | "title"
+      | "color"
+      | "width"
+      | "opacity"
+      | "icon"
+      | "size"
+      | "coords"
+      | "waypoints"
+      | "legs"
+      | "snapped"
+    >
+  >,
+) => void;
+
+function IconPicker({ obj, updateObject }: { obj: MapObject; updateObject: UpdateObjectFn }) {
+  const previews = useMemo(
+    () => Object.fromEntries(MARKER_ICONS.map(({ id }) => [id, iconPreviewDataUrl(id, obj.color)])),
+    [obj.color],
+  );
+  return (
+    <div className="grid grid-cols-6 gap-1">
+      {MARKER_ICONS.map(({ id, label }) => {
+        const active = (obj.icon ?? DEFAULT_MARKER_ICON) === id;
+        return (
+          <button
+            key={id}
+            onClick={() => updateObject(obj.id, { icon: id })}
+            title={label}
+            aria-label={`Icon ${label}`}
+            className={`flex items-center justify-center rounded border p-0.5 ${
+              active ? "border-emerald-600 bg-emerald-50" : "border-gray-200 bg-white hover:border-gray-300"
+            }`}
+          >
+            {/* eslint-disable-next-line @next/next/no-img-element -- small client-generated data URL, not a static asset */}
+            <img src={previews[id]} alt="" className="h-6 w-6" />
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+const SIMPLIFY_MIN_POINTS = 20;
+const SIMPLIFY_MAX_TOLERANCE_M = 50;
+
+/** Douglas-Peucker simplify with a live point-count readout. Simplifying
+ * clears routing topology (waypoints/legs/snapped) — the result is a plain
+ * polyline, same as an imported line; re-draw with snap for a fresh route. */
+function SimplifyControl({ obj, updateObject }: { obj: MapObject; updateObject: UpdateObjectFn }) {
+  const [original] = useState(obj.coords);
+  const [tolerance, setTolerance] = useState(0);
+  const previewCount = tolerance > 0 ? simplifyPath(original, tolerance).length : original.length;
+
+  return (
+    <div className="space-y-1 rounded-md border border-gray-200 bg-white p-2">
+      <div className="flex items-center gap-2">
+        <label htmlFor={`simplify-${obj.id}`} className="text-xs text-gray-500">
+          Simplify
+        </label>
+        <input
+          id={`simplify-${obj.id}`}
+          type="range"
+          min={0}
+          max={SIMPLIFY_MAX_TOLERANCE_M}
+          value={tolerance}
+          onChange={(e) => {
+            const t = Number(e.target.value);
+            setTolerance(t);
+            updateObject(obj.id, {
+              coords: t > 0 ? simplifyPath(original, t) : original,
+              waypoints: undefined,
+              legs: undefined,
+              snapped: undefined,
+            });
+          }}
+          className="h-1 flex-1 accent-emerald-700"
+          aria-label="Simplify tolerance"
+        />
+        <span className="w-12 text-right text-xs tabular-nums text-gray-500">{tolerance} m</span>
+      </div>
+      <p className="text-[10px] text-gray-400">
+        {original.length} → {previewCount} points
+        {tolerance > 0 && " · drops routing detail (re-draw with snap for a fresh route)"}
+      </p>
+    </div>
+  );
 }
 
 function ObjectRow({ obj }: { obj: MapObject }) {
@@ -92,10 +192,10 @@ function ObjectRow({ obj }: { obj: MapObject }) {
             className="w-full rounded border border-gray-300 bg-white px-2 py-1 text-sm text-gray-900"
             aria-label="Object title"
           />
-          {obj.kind === "line" && (
+          {(obj.kind === "line" || obj.kind === "polygon") && (
             <div className="flex items-center gap-2">
               <label htmlFor={`width-${obj.id}`} className="text-xs text-gray-500">
-                Width
+                {obj.kind === "polygon" ? "Outline" : "Width"}
               </label>
               <input
                 id={`width-${obj.id}`}
@@ -105,12 +205,57 @@ function ObjectRow({ obj }: { obj: MapObject }) {
                 value={obj.width ?? DEFAULT_LINE_WIDTH}
                 onChange={(e) => updateObject(obj.id, { width: Number(e.target.value) })}
                 className="h-1 flex-1 accent-emerald-700"
-                aria-label="Line width"
+                aria-label={obj.kind === "polygon" ? "Outline width" : "Line width"}
               />
               <span className="w-6 text-right text-xs tabular-nums text-gray-500">
                 {obj.width ?? DEFAULT_LINE_WIDTH}
               </span>
             </div>
+          )}
+          {obj.kind === "marker" && (
+            <>
+              <IconPicker obj={obj} updateObject={updateObject} />
+              <div className="flex items-center gap-2">
+                <label htmlFor={`size-${obj.id}`} className="text-xs text-gray-500">
+                  Size
+                </label>
+                <input
+                  id={`size-${obj.id}`}
+                  type="range"
+                  min={MIN_MARKER_SIZE}
+                  max={MAX_MARKER_SIZE}
+                  step={0.5}
+                  value={obj.size ?? DEFAULT_MARKER_SIZE}
+                  onChange={(e) => updateObject(obj.id, { size: Number(e.target.value) })}
+                  className="h-1 flex-1 accent-emerald-700"
+                  aria-label="Marker size"
+                />
+                <span className="w-6 text-right text-xs tabular-nums text-gray-500">
+                  {obj.size ?? DEFAULT_MARKER_SIZE}
+                </span>
+              </div>
+            </>
+          )}
+          <div className="flex items-center gap-2">
+            <label htmlFor={`opacity-${obj.id}`} className="text-xs text-gray-500">
+              Opacity
+            </label>
+            <input
+              id={`opacity-${obj.id}`}
+              type="range"
+              min={0}
+              max={100}
+              value={Math.round((obj.opacity ?? DEFAULT_OPACITY) * 100)}
+              onChange={(e) => updateObject(obj.id, { opacity: Number(e.target.value) / 100 })}
+              className="h-1 flex-1 accent-emerald-700"
+              aria-label="Object opacity"
+            />
+            <span className="w-9 text-right text-xs tabular-nums text-gray-500">
+              {Math.round((obj.opacity ?? DEFAULT_OPACITY) * 100)}%
+            </span>
+          </div>
+          {obj.kind === "line" && obj.coords.length > SIMPLIFY_MIN_POINTS && (
+            <SimplifyControl obj={obj} updateObject={updateObject} />
           )}
           <div className="flex items-center gap-1.5">
             {OBJECT_COLORS.map((c) => (

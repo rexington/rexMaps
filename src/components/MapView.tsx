@@ -4,6 +4,7 @@ import {
   GeolocateControl,
   Map as MaplibreMap,
   NavigationControl,
+  Popup,
   ScaleControl,
   setWorkerUrl,
   type GeoJSONSource,
@@ -13,6 +14,8 @@ import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef } from "react";
 import type { LngLat } from "@/lib/geo";
 import { buildStyle } from "@/lib/layers/compositor";
+import { loadOverlayInto, type CustomOverlayDef } from "@/lib/layers/customOverlay";
+import type { ActiveLayer } from "@/lib/layers/types";
 import {
   DRAFT_SOURCE,
   EMPTY_FC,
@@ -20,6 +23,7 @@ import {
   draftFeatureCollection,
 } from "@/lib/layers/objectLayers";
 import { mapRef } from "@/lib/mapRef";
+import { ensureMarkerIcons } from "@/lib/markerIcons";
 import { objectsToFeatureCollection } from "@/lib/objects";
 import {
   appendDraftPoint,
@@ -92,11 +96,126 @@ function handleAt(
   return { id: hit.properties!.id as string, idx: hit.properties!.idx as number };
 }
 
+const isCustomOverlaySource = (source: unknown) =>
+  typeof source === "string" && source.startsWith("custom-overlay:");
+
+/** A custom-overlay feature (any layer) at a screen point, if any. */
+function customOverlayFeatureAt(map: MaplibreMap, point: MapMouseEvent["point"]) {
+  return map
+    .queryRenderedFeatures(hitBox(point))
+    .find((f) => isCustomOverlaySource(f.source));
+}
+
+/** Builds popup content from raw feature properties via textContent only —
+ * this data comes from a user-supplied third-party URL, so it must never be
+ * parsed as HTML (see showCustomOverlayPopup). */
+function buildPopupContent(props: Record<string, unknown>): HTMLElement {
+  const container = document.createElement("div");
+  container.style.fontSize = "12px";
+  container.style.maxHeight = "200px";
+  container.style.overflowY = "auto";
+  const entries = Object.entries(props).filter(
+    ([, v]) => v !== null && v !== undefined && v !== "",
+  );
+  if (entries.length === 0) {
+    container.textContent = "No attributes";
+    container.style.color = "#6b7280";
+    return container;
+  }
+  const table = document.createElement("table");
+  table.style.borderCollapse = "collapse";
+  for (const [k, v] of entries) {
+    const row = table.insertRow();
+    const keyCell = row.insertCell();
+    keyCell.textContent = k;
+    keyCell.style.paddingRight = "8px";
+    keyCell.style.color = "#6b7280";
+    keyCell.style.verticalAlign = "top";
+    const valCell = row.insertCell();
+    valCell.textContent = String(v);
+  }
+  container.appendChild(table);
+  return container;
+}
+
+function showCustomOverlayPopup(map: MaplibreMap, e: MapMouseEvent) {
+  const hit = customOverlayFeatureAt(map, e.point);
+  if (!hit) return;
+  new Popup({ closeButton: true, maxWidth: "260px" })
+    .setLngLat(e.lngLat)
+    .setDOMContent(buildPopupContent(hit.properties ?? {}))
+    .addTo(map);
+}
+
+/** Active custom-overlay defs currently visible in the stack. */
+function activeCustomOverlays(
+  stack: ActiveLayer[],
+  customOverlays: CustomOverlayDef[],
+): CustomOverlayDef[] {
+  const out: CustomOverlayDef[] = [];
+  for (const l of stack) {
+    if (!l.visible) continue;
+    const def = customOverlays.find((c) => c.id === l.defId);
+    if (def) out.push(def);
+  }
+  return out;
+}
+
+function currentBbox(map: MaplibreMap): [number, number, number, number] {
+  const b = map.getBounds();
+  return [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+}
+
+/** Refetches every active custom overlay for the current viewport. Called
+ * right after a style rebuild (so freshly-added empty sources get populated)
+ * and, debounced, whenever the viewport changes (see CustomOverlayData). */
+function refreshCustomOverlays(
+  map: MaplibreMap,
+  active: CustomOverlayDef[],
+  signal: AbortSignal | undefined,
+  setStatus: (id: string, status: { loading: boolean; error: string | null }) => void,
+) {
+  if (active.length === 0) return;
+  const bbox = currentBbox(map);
+  for (const def of active) {
+    loadOverlayInto(map, def, bbox, signal, setStatus);
+  }
+}
+
+/** Live-refetches active custom overlays as the user pans/zooms. Rendered
+ * unconditionally from MapView's JSX (not inside a collapsible panel) — a
+ * layer's data source has to keep updating even while LayerPanel is closed,
+ * which it defaults to since the mobile layout pass. */
+function CustomOverlayData() {
+  const stack = useMapStore((s) => s.stack);
+  const customOverlays = useMapStore((s) => s.customOverlays);
+  const viewport = useMapStore((s) => s.viewport);
+  const setStatus = useMapStore((s) => s.setCustomOverlayStatus);
+
+  useEffect(() => {
+    const map = mapRef.current;
+    if (!map) return;
+    const active = activeCustomOverlays(stack, customOverlays);
+    if (active.length === 0) return;
+    const controller = new AbortController();
+    const t = setTimeout(() => {
+      refreshCustomOverlays(map, active, controller.signal, setStatus);
+    }, 400);
+    return () => {
+      clearTimeout(t);
+      controller.abort();
+    };
+  }, [stack, customOverlays, viewport, setStatus]);
+
+  return null;
+}
+
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const buildSeq = useRef(0);
   const stack = useMapStore((s) => s.stack);
   const sentinel = useMapStore((s) => s.sentinel);
+  const customOverlays = useMapStore((s) => s.customOverlays);
   // "Possible routes" hint: only while actually drawing a snapped line.
   const trailOverlay = useMapStore((s) => s.tool === "line" && s.snapEnabled);
 
@@ -150,7 +269,10 @@ export default function MapView() {
           if (justDragged) {
             justDragged = false;
           } else if (!handleAt(map, e.point)) {
-            s.setSelected(hitTest(map, e.point));
+            // Drawn objects win the hit-test over custom-overlay features.
+            const objId = hitTest(map, e.point);
+            s.setSelected(objId);
+            if (!objId) showCustomOverlayPopup(map, e);
           }
           break;
       }
@@ -193,7 +315,7 @@ export default function MapView() {
       } else if (s.tool === "select") {
         map.getCanvas().style.cursor = handleAt(map, e.point)
           ? "grab"
-          : hitTest(map, e.point)
+          : hitTest(map, e.point) || customOverlayFeatureAt(map, e.point)
             ? "pointer"
             : "";
       }
@@ -234,6 +356,7 @@ export default function MapView() {
     // --- Fast-path store subscription: data + interaction state (no re-render)
     const unsubscribe = useMapStore.subscribe((s, prev) => {
       if (s.objects !== prev.objects || s.selectedId !== prev.selectedId) {
+        if (s.objects !== prev.objects) ensureMarkerIcons(map, s.objects);
         setSourceData(map, OBJECTS_SOURCE, currentObjectsFC());
       }
       if (s.draft !== prev.draft || s.tool !== prev.tool) {
@@ -247,6 +370,9 @@ export default function MapView() {
     });
 
     mapRef.current = map;
+    // Icons for whatever markers were already loaded from persisted state —
+    // the subscribe fast-path above only fires on later *changes*.
+    ensureMarkerIcons(map, useMapStore.getState().objects);
     // Debug/console access (harmless in prod; used by headless verification).
     (window as unknown as { __rexmap?: MaplibreMap }).__rexmap = map;
     (window as unknown as { __rexstore?: typeof useMapStore }).__rexstore =
@@ -265,14 +391,29 @@ export default function MapView() {
   useEffect(() => {
     const seq = ++buildSeq.current;
     let cancelled = false;
-    buildStyle(stack, currentObjectsFC(), currentDraftFC(), { trailOverlay }).then((style) => {
+    buildStyle(stack, currentObjectsFC(), currentDraftFC(), {
+      trailOverlay,
+      customOverlays,
+    }).then((style) => {
       if (cancelled || seq !== buildSeq.current) return;
-      mapRef.current?.setStyle(style, { diff: true });
+      const map = mapRef.current;
+      if (!map) return;
+      map.setStyle(style, { diff: true });
+      // Defensive: re-ensure marker images in case setStyle reset them.
+      ensureMarkerIcons(map, useMapStore.getState().objects);
+      // Custom-overlay sources are always seeded empty by the compositor —
+      // populate them now that they actually exist in the applied style.
+      refreshCustomOverlays(
+        map,
+        activeCustomOverlays(stack, customOverlays),
+        undefined,
+        useMapStore.getState().setCustomOverlayStatus,
+      );
     });
     return () => {
       cancelled = true;
     };
-  }, [stack, sentinel, trailOverlay]);
+  }, [stack, sentinel, trailOverlay, customOverlays]);
 
   return (
     <div className="relative h-dvh w-full">
@@ -289,6 +430,7 @@ export default function MapView() {
       <ObjectsPanel />
       <LayerPanel />
       <ProfilePanel />
+      <CustomOverlayData />
     </div>
   );
 }

@@ -25,6 +25,7 @@ import {
 import type { ActiveLayer, LayerDef } from "@/lib/layers/types";
 import { mapRef } from "@/lib/mapRef";
 import { useMapStore } from "@/store/mapStore";
+import CustomOverlaySection from "./CustomOverlaySection";
 import OfflineSection from "./OfflineSection";
 
 /** Why this layer can't be enabled yet (missing credential), or null. */
@@ -131,12 +132,15 @@ function SentinelControls() {
 }
 
 function ActiveRow({ entry }: { entry: ActiveLayer }) {
-  const def = layerDef(entry.defId);
-  const { setOpacity, toggleVisible, removeLayer } = useMapStore();
+  const customOverlays = useMapStore((s) => s.customOverlays);
+  const status = useMapStore((s) => s.customOverlayStatus[entry.defId]);
+  const def = layerDef(entry.defId) ?? customOverlays.find((c) => c.id === entry.defId);
+  const { setOpacity, toggleVisible, removeLayer, removeCustomOverlayDef } = useMapStore();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: entry.defId });
 
   if (!def) return null;
+  const isCustom = def.kind === "feature-query";
   return (
     <li
       ref={setNodeRef}
@@ -159,7 +163,7 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
           className={`flex-1 truncate text-sm ${
             entry.visible ? "text-gray-900" : "text-gray-400"
           }`}
-          title={def.description}
+          title={"description" in def ? def.description : undefined}
         >
           {def.name}
         </span>
@@ -195,6 +199,23 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
         </span>
       </div>
       {entry.defId === "sentinel-s2" && <SentinelControls />}
+      {isCustom && status?.error && (
+        <p className="mt-1 pl-6 text-xs text-red-600">{status.error}</p>
+      )}
+      {isCustom && !status?.error && status?.loading && (
+        <p className="mt-1 pl-6 text-xs text-gray-400">Loading…</p>
+      )}
+      {isCustom && (
+        <button
+          onClick={() => {
+            if (confirm(`Delete "${def.name}"? This forgets the saved URL, not just hides it.`))
+              removeCustomOverlayDef(entry.defId);
+          }}
+          className="mt-1 pl-6 text-xs text-gray-400 hover:text-red-600"
+        >
+          Delete this source
+        </button>
+      )}
     </li>
   );
 }
@@ -292,6 +313,7 @@ export default function LayerPanel() {
               ),
           )}
 
+          <CustomOverlaySection />
           <OfflineSection />
         </div>
       )}

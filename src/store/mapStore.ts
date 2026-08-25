@@ -7,6 +7,7 @@ import {
   newObject,
   type MapObject,
 } from "@/lib/objects";
+import type { CustomOverlayDef } from "@/lib/layers/customOverlay";
 import { layerDef } from "@/lib/layers/registry";
 import { isVectorKind, type ActiveLayer } from "@/lib/layers/types";
 import { routeLeg } from "@/lib/routing";
@@ -82,6 +83,16 @@ interface MapStore {
   removeOfflinePack: (id: string) => void;
   clearOfflinePacks: () => void;
 
+  // Custom overlays (user-supplied WFS catalogs, e.g. a SOTA summits server).
+  // Definitions are device-local like offlinePacks — not part of saved maps.
+  customOverlays: CustomOverlayDef[];
+  addCustomOverlay: (def: Omit<CustomOverlayDef, "id" | "kind" | "protocol">) => void;
+  /** Forgets the definition entirely (not just hides it — see removeLayer for that). */
+  removeCustomOverlayDef: (id: string) => void;
+  /** Runtime-only fetch status per overlay id, keyed for LayerPanel display. */
+  customOverlayStatus: Record<string, { loading: boolean; error: string | null }>;
+  setCustomOverlayStatus: (id: string, status: { loading: boolean; error: string | null }) => void;
+
   setViewport: (v: Viewport) => void;
 
   // Layer stack
@@ -107,7 +118,19 @@ interface MapStore {
   updateObject: (
     id: string,
     patch: Partial<
-      Pick<MapObject, "title" | "color" | "width" | "coords" | "waypoints" | "legs" | "snapped">
+      Pick<
+        MapObject,
+        | "title"
+        | "color"
+        | "width"
+        | "opacity"
+        | "icon"
+        | "size"
+        | "coords"
+        | "waypoints"
+        | "legs"
+        | "snapped"
+      >
     >,
   ) => void;
   removeObject: (id: string) => void;
@@ -158,6 +181,8 @@ export const useMapStore = create<MapStore>()(
       currentMap: { id: null, title: "Untitled map" },
       dirty: false,
       offlinePacks: [],
+      customOverlays: [],
+      customOverlayStatus: {},
 
       setSentinel: (patch) =>
         set((s) => ({ sentinel: { ...s.sentinel, ...patch } })),
@@ -172,13 +197,39 @@ export const useMapStore = create<MapStore>()(
         set((s) => ({ offlinePacks: s.offlinePacks.filter((p) => p.id !== id) })),
       clearOfflinePacks: () => set({ offlinePacks: [] }),
 
+      addCustomOverlay: (def) =>
+        set((s) => {
+          const id = crypto.randomUUID();
+          const full: CustomOverlayDef = { id, kind: "feature-query", protocol: "wfs", ...def };
+          return {
+            customOverlays: [...s.customOverlays, full],
+            stack: [...s.stack, { defId: id, visible: true, opacity: 1 }],
+            dirty: true,
+          };
+        }),
+      removeCustomOverlayDef: (id) =>
+        set((s) => ({
+          customOverlays: s.customOverlays.filter((c) => c.id !== id),
+          stack: s.stack.filter((l) => l.defId !== id),
+          dirty: true,
+        })),
+      setCustomOverlayStatus: (id, status) =>
+        set((s) => ({ customOverlayStatus: { ...s.customOverlayStatus, [id]: status } })),
+
       setViewport: (viewport) => set({ viewport }),
 
       addLayer: (defId) =>
         set((s) => {
           if (s.stack.some((l) => l.defId === defId)) return s;
           const def = layerDef(defId);
-          if (!def) return s;
+          if (!def) {
+            // Not a static registry layer — maybe a user-defined custom overlay.
+            if (!s.customOverlays.some((c) => c.id === defId)) return s;
+            return {
+              stack: [...s.stack, { defId, visible: true, opacity: 1 }],
+              dirty: true,
+            };
+          }
           // Only one vector layer at a time (single glyphs URL per style).
           const stack = isVectorKind(def)
             ? s.stack.filter((l) => {
@@ -364,6 +415,7 @@ export const useMapStore = create<MapStore>()(
         currentMap: s.currentMap,
         dirty: s.dirty,
         offlinePacks: s.offlinePacks,
+        customOverlays: s.customOverlays,
       }),
       migrate: (persisted) => persisted as MapStore,
     },

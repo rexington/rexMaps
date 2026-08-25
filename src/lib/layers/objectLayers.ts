@@ -4,6 +4,7 @@ import type {
   SourceSpecification,
 } from "maplibre-gl";
 import type { LngLat } from "../geo";
+import { ICON_SCALE_DIAMETER } from "../markerIcons";
 
 /**
  * Drawn map objects + in-progress draft, rendered as the topmost style layers.
@@ -21,6 +22,8 @@ export const EMPTY_FC: FeatureCollection = {
 
 const color = ["get", "color"];
 const lineWidth = ["get", "width"];
+const opacity = ["get", "opacity"];
+const markerSize = ["get", "size"];
 const ifSelected = (yes: unknown, no: unknown) =>
   ["case", ["==", ["get", "selected"], true], yes, no];
 
@@ -42,7 +45,10 @@ export function objectStyleParts(
       type: "fill",
       source: OBJECTS_SOURCE,
       filter: ["==", ["get", "kind"], "polygon"],
-      paint: { "fill-color": color, "fill-opacity": ifSelected(0.35, 0.2) },
+      paint: {
+        "fill-color": color,
+        "fill-opacity": ["*", opacity, ifSelected(0.35, 0.2)],
+      },
     },
     {
       id: "obj-polygon-outline",
@@ -50,7 +56,11 @@ export function objectStyleParts(
       source: OBJECTS_SOURCE,
       filter: ["==", ["get", "kind"], "polygon"],
       layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": color, "line-width": ifSelected(3.5, 2) },
+      paint: {
+        "line-color": color,
+        "line-width": ifSelected(["+", lineWidth, 1], lineWidth),
+        "line-opacity": opacity,
+      },
     },
     {
       id: "obj-line-halo",
@@ -77,6 +87,7 @@ export function objectStyleParts(
       paint: {
         "line-color": color,
         "line-width": ifSelected(["+", lineWidth, 1], lineWidth),
+        "line-opacity": opacity,
       },
     },
     {
@@ -88,19 +99,28 @@ export function objectStyleParts(
         ["==", ["get", "kind"], "marker"],
         ["==", ["get", "selected"], true],
       ],
-      paint: { "circle-radius": 11, "circle-color": "#ffffff", "circle-opacity": 0.9 },
+      paint: {
+        "circle-radius": ["+", markerSize, 4.5],
+        "circle-color": "#ffffff",
+        "circle-opacity": 0.9,
+      },
     },
     {
       id: "obj-marker",
-      type: "circle",
+      type: "symbol",
       source: OBJECTS_SOURCE,
       filter: ["==", ["get", "kind"], "marker"],
-      paint: {
-        "circle-radius": ifSelected(8, 6.5),
-        "circle-color": color,
-        "circle-stroke-color": "#ffffff",
-        "circle-stroke-width": 2,
+      layout: {
+        "icon-image": ["concat", "marker-icon:", ["get", "icon"], ":", ["get", "color"]],
+        "icon-size": [
+          "/",
+          ["*", 2, ifSelected(["+", markerSize, 1.5], markerSize)],
+          ICON_SCALE_DIAMETER,
+        ],
+        "icon-allow-overlap": true,
+        "icon-ignore-placement": true,
       },
+      paint: { "icon-opacity": opacity },
     },
     // Draft (in-progress drawing): committed path solid, cursor segment dashed.
     {
