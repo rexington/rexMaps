@@ -550,6 +550,27 @@ this app's own fixed 12-icon set, and would need a real Maki-icon renderer
 to do properly; flagged as a separate, bigger decision rather than guessed
 at.
 
+### Numbered/lettered marker-symbol badges (done 2026-08-26)
+Follow-on to the above, once Rex asked about CalTopo icon-set parity.
+Checked before building anything: CalTopo's own icon vocabulary is
+undocumented and explicitly subject to change per their own community posts
+— no stable public target to match. simplestyle-spec's own convention,
+though, *is* public and stable: `marker-symbol` as a bare digit "0"-"9" or
+letter "a"-"z" means "numbered/lettered circle marker." Implemented that,
+plus the literal `"circle-N"` form (N 1-2 digits) since that's what real
+data in the wild (the SOTA server) actually emits — verified live values up
+to `"circle-10"` (SOTA's max summit point value) before picking a regex, so
+the 1-2-digit case wasn't a guess. `markerBadge()` in `customOverlay.ts`
+extracts the badge character once per fetch (not per-render — MapLibre's
+expression DSL has no regex, so this has to happen in JS, not in the style),
+stamping a `__markerBadge` property onto qualifying point features; a new
+symbol layer renders it centered on the marker circle, independent of the
+optional below-marker `labelField` text. Verified against real summits
+(Grays Peak, Mount Blue Sky, etc. correctly showing "10"; others showing 8/
+6/4) at a real zoom level, legible and correctly colored per-feature.
+Named Maki icons (e.g. `"campsite"`) remain deferred, per the same
+undocumented-vocabulary reasoning above.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These

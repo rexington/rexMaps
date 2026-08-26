@@ -17,9 +17,14 @@ import type {
  * trailOverlay.ts for that lesson applied to tiles instead of features).
  *
  * Deliberately out of scope for v1: Esri FeatureServer support (protocol
- * field left room for it), per-attribute styling/filtering, and offline
- * packs (live queries only — see registry.ts's layerDef(), which these
- * never appear in, so offlineEligibleLayers() excludes them for free).
+ * field left room for it), per-attribute filtering, and offline packs (live
+ * queries only — see registry.ts's layerDef(), which these never appear in,
+ * so offlineEligibleLayers() excludes them for free). Named Maki-style
+ * icons (marker-symbol values like "campsite") are also deferred — unlike a
+ * color or a digit/letter badge, an icon needs an actual icon set to render,
+ * and CalTopo's own (the obvious reason to want "parity") turns out to be
+ * undocumented and can change without notice, so there's no stable public
+ * vocabulary to build against yet.
  */
 export interface CustomOverlayDef {
   id: string;
@@ -70,6 +75,21 @@ function wfsUrl(def: CustomOverlayDef, bbox: [number, number, number, number]): 
   return base + params.toString();
 }
 
+/**
+ * simplestyle-spec's `marker-symbol` numbered/lettered marker convention: a
+ * bare digit "0"-"9" or letter "a"-"z" per the actual spec, plus "circle-N"
+ * (N up to 2 digits — verified against a real feed with values up to
+ * "circle-10", SOTA's max summit point value) since that's the literal form
+ * at least one real source in the wild actually emits. Anything else (Maki
+ * icon names) isn't a badge at all — see the file-level comment.
+ */
+function markerBadge(symbol: unknown): string | null {
+  if (typeof symbol !== "string") return null;
+  if (/^[0-9a-z]$/.test(symbol)) return symbol;
+  const m = /^circle-(\d{1,2})$/.exec(symbol);
+  return m ? m[1] : null;
+}
+
 export async function fetchOverlayFeatures(
   def: CustomOverlayDef,
   bbox: [number, number, number, number],
@@ -84,6 +104,13 @@ export async function fetchOverlayFeatures(
     }
     if (data.features.length > MAX_FEATURES) {
       return { error: `${MAX_FEATURES}+ features in view — zoom in to load this source` };
+    }
+    // Precompute a badge character where marker-symbol carries one, so the
+    // style layer just reads a plain property instead of parsing strings in
+    // MapLibre's expression DSL (which has no regex).
+    for (const f of data.features) {
+      const badge = markerBadge(f.properties?.["marker-symbol"]);
+      if (badge && f.properties) f.properties.__markerBadge = badge;
     }
     return { data };
   } catch (err) {
@@ -103,24 +130,19 @@ const POLY_TYPES = ["Polygon", "MultiPolygon"];
 const isType = (types: string[]): FilterSpecification =>
   ["match", ["geometry-type"], types, true, false] as unknown as FilterSpecification;
 
-/** Empty-seeded source + geometry-type-filtered style layers for one overlay.
- * Feature data itself arrives later via setData (see loadOverlayInto) — never
- * through a style rebuild, same rule as the drawn-objects/draft sources. */
 /** A feature's own color/opacity, falling back to the overlay's chosen
  * default — the color half of "simplestyle-spec"
  * (github.com/mapbox/simplestyle-spec), a de facto convention some GeoJSON
  * sources (including a real SOTA summits server this was verified against)
- * use to carry per-feature styling right in the properties. `marker-symbol`
- * (Maki icon names/numbered badges) is deliberately not attempted here —
- * unlike a color or opacity, an icon needs an actual icon set to render, and
- * the spec's numbered/lettered marker convention doesn't map cleanly onto
- * this app's own fixed icon set.
- */
+ * use to carry per-feature styling right in the properties. */
 const styleColor = (prop: string, fallback: string) =>
   ["coalesce", ["get", prop], fallback] as unknown as ExpressionSpecification;
 const styleOpacity = (prop: string, fallback: number, overall: number) =>
   ["*", overall, ["coalesce", ["get", prop], fallback]] as unknown as ExpressionSpecification;
 
+/** Empty-seeded source + geometry-type-filtered style layers for one overlay.
+ * Feature data itself arrives later via setData (see loadOverlayInto) — never
+ * through a style rebuild, same rule as the drawn-objects/draft sources. */
 export function customOverlayStyleParts(
   def: CustomOverlayDef,
   opacity: number,
@@ -156,11 +178,32 @@ export function customOverlayStyleParts(
       filter: isType(POINT_TYPES),
       paint: {
         "circle-color": styleColor("marker-color", def.color),
-        "circle-radius": 5.5,
+        "circle-radius": 7.5,
         "circle-stroke-color": "#ffffff",
-        "circle-stroke-width": 1.5,
+        "circle-stroke-width": 1.75,
         "circle-opacity": opacity,
         "circle-stroke-opacity": opacity,
+      },
+    },
+    // Numbered/lettered marker-symbol badge (see markerBadge()), centered on
+    // the point itself — independent of the below-marker labelField text.
+    {
+      id: `${source}/badge`,
+      type: "symbol",
+      source,
+      filter: ["all", isType(POINT_TYPES), ["has", "__markerBadge"]] as unknown as FilterSpecification,
+      layout: {
+        "text-field": ["get", "__markerBadge"],
+        "text-size": 10.5,
+        "text-anchor": "center",
+        "text-allow-overlap": true,
+        "text-ignore-placement": true,
+      },
+      paint: {
+        "text-color": "#ffffff",
+        "text-halo-color": "rgba(0, 0, 0, 0.6)",
+        "text-halo-width": 1,
+        "text-opacity": opacity,
       },
     },
   ];
