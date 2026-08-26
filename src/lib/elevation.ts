@@ -47,7 +47,8 @@ function toPixel([lng, lat]: LngLat): { px: number; py: number } {
   return { px: x, py: y };
 }
 
-async function elevationAt(pt: LngLat): Promise<number | null> {
+/** DEM elevation (meters) at a single point, or null off-planet/on fetch failure. */
+export async function elevationAt(pt: LngLat): Promise<number | null> {
   const { px, py } = toPixel(pt);
   const tx = Math.floor(px / TILE_SIZE);
   const ty = Math.floor(py / TILE_SIZE);

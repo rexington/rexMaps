@@ -3,14 +3,13 @@
 import { Marker } from "maplibre-gl";
 import { useEffect, useRef, useState } from "react";
 import { elevationProfile, type ElevationProfile } from "@/lib/elevation";
-import { formatDistance } from "@/lib/geo";
+import { formatDistance, metersToFeet as ft } from "@/lib/geo";
 import { mapRef } from "@/lib/mapRef";
 import { useMapStore } from "@/store/mapStore";
 
 const W = 520;
 const H = 110;
 const PAD = { l: 44, r: 10, t: 8, b: 18 };
-const ft = (m: number) => Math.round(m * 3.28084);
 
 function useHoverMarker() {
   const markerRef = useRef<Marker | null>(null);

@@ -503,6 +503,53 @@ already, so adding it later needs no migration, just a second code path.
   SOTA-summit-shaped case (points with a name label) that endpoint doesn't
   exercise.
 
+### Cursor elevation readout + add-marker-by-coordinates (done 2026-08-26)
+Two small, ad hoc requests (not backlog table items).
+
+- **Elevation at cursor**: reuses the existing Terrarium DEM point-sample
+  function from `elevation.ts` (already powered per-point lookups inside
+  `elevationProfile()`, just hadn't been exported) — no new data source.
+  Trailing-throttled at 120ms in `MapView`'s existing `mousemove` handler
+  (DEM tile reads are cache-backed and fast, but still async, and mousemove
+  fires far more often than that), shown as a small bottom-left readout,
+  cleared on `mouseout`. `metersToFeet` and `parseLatLng` moved from
+  page-local helpers (`ProfilePanel.tsx`'s old `ft()`, `SearchBox.tsx`'s old
+  inline regex) into `geo.ts` so both this and the coordinate-entry feature
+  below share one implementation instead of two near-identical ones.
+- **Add marker by coordinates**: inline "lat, lng" input in the draw-hint bar,
+  shown only while the marker tool is active. Reuses the same `parseLatLng`
+  SearchBox already used for "jump to these coordinates" — same accepted
+  input shape, so it's the one format to remember app-wide. Also flies the
+  camera to the new marker, since entering coordinates by hand is usually
+  precisely because the point isn't already on screen.
+
+### Custom overlays honor simplestyle-spec colors (done 2026-08-26)
+Rex's own SOTA server (now self-hosted at wfs.ke6mt.us, off the ngrok tunnel
+from the earlier debugging session) turned out to publish real
+[simplestyle-spec](https://github.com/mapbox/simplestyle-spec) properties —
+`marker-color` on summit points, `stroke`/`stroke-width`/`fill`/`fill-opacity`
+on activation-zone polygons. Worth being precise about what was actually
+wrong: this was never a bug in the WFS fetch path — WFS returns raw
+geometry+attributes with zero rendering instructions, full stop. GeoServer's
+*own* preview looking different is a WMS/SLD thing, a separate protocol this
+connector doesn't use and structurally can't inherit styling from. What
+*was* missing: `customOverlayStyleParts()` only ever applied one flat color
+for the whole source, ignoring styling properties already sitting right in
+each feature.
+
+Fixed generically, not SOTA-specifically: every color/opacity paint property
+now reads `["coalesce", ["get", <simplestyle-property>], <overlay's own
+color>]`, so a feature's own `marker-color`/`stroke`/`fill` wins when
+present, and any other WFS source lacking these properties falls back to
+the source's configured color exactly as before — verified both cases
+live against wfs.ke6mt.us (real per-feature colors render; a wide-area query
+against summits with no activation-zone polygon in view still rendered
+fine). `marker-symbol` (present as e.g. `"circle-2"`) is deliberately not
+handled — simplestyle's numbered/lettered marker convention doesn't map onto
+this app's own fixed 12-icon set, and would need a real Maki-icon renderer
+to do properly; flagged as a separate, bigger decision rather than guessed
+at.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These

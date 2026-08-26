@@ -1,5 +1,6 @@
 import type { FeatureCollection } from "geojson";
 import type {
+  ExpressionSpecification,
   FilterSpecification,
   GeoJSONSource,
   LayerSpecification,
@@ -105,6 +106,21 @@ const isType = (types: string[]): FilterSpecification =>
 /** Empty-seeded source + geometry-type-filtered style layers for one overlay.
  * Feature data itself arrives later via setData (see loadOverlayInto) — never
  * through a style rebuild, same rule as the drawn-objects/draft sources. */
+/** A feature's own color/opacity, falling back to the overlay's chosen
+ * default — the color half of "simplestyle-spec"
+ * (github.com/mapbox/simplestyle-spec), a de facto convention some GeoJSON
+ * sources (including a real SOTA summits server this was verified against)
+ * use to carry per-feature styling right in the properties. `marker-symbol`
+ * (Maki icon names/numbered badges) is deliberately not attempted here —
+ * unlike a color or opacity, an icon needs an actual icon set to render, and
+ * the spec's numbered/lettered marker convention doesn't map cleanly onto
+ * this app's own fixed icon set.
+ */
+const styleColor = (prop: string, fallback: string) =>
+  ["coalesce", ["get", prop], fallback] as unknown as ExpressionSpecification;
+const styleOpacity = (prop: string, fallback: number, overall: number) =>
+  ["*", overall, ["coalesce", ["get", prop], fallback]] as unknown as ExpressionSpecification;
+
 export function customOverlayStyleParts(
   def: CustomOverlayDef,
   opacity: number,
@@ -116,7 +132,10 @@ export function customOverlayStyleParts(
       type: "fill",
       source,
       filter: isType(POLY_TYPES),
-      paint: { "fill-color": def.color, "fill-opacity": 0.25 * opacity },
+      paint: {
+        "fill-color": styleColor("fill", def.color),
+        "fill-opacity": styleOpacity("fill-opacity", 0.25, opacity),
+      },
     },
     {
       id: `${source}/line`,
@@ -124,7 +143,11 @@ export function customOverlayStyleParts(
       source,
       filter: ["any", isType(POLY_TYPES), isType(LINE_TYPES)] as unknown as FilterSpecification,
       layout: { "line-join": "round", "line-cap": "round" },
-      paint: { "line-color": def.color, "line-width": 2.5, "line-opacity": opacity },
+      paint: {
+        "line-color": styleColor("stroke", def.color),
+        "line-width": ["coalesce", ["get", "stroke-width"], 2.5] as unknown as ExpressionSpecification,
+        "line-opacity": styleOpacity("stroke-opacity", 1, opacity),
+      },
     },
     {
       id: `${source}/point`,
@@ -132,7 +155,7 @@ export function customOverlayStyleParts(
       source,
       filter: isType(POINT_TYPES),
       paint: {
-        "circle-color": def.color,
+        "circle-color": styleColor("marker-color", def.color),
         "circle-radius": 5.5,
         "circle-stroke-color": "#ffffff",
         "circle-stroke-width": 1.5,

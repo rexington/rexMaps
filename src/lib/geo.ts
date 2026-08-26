@@ -28,6 +28,19 @@ export function formatDistance(meters: number): string {
   return `${miles.toFixed(miles < 10 ? 2 : 1)} mi`;
 }
 
+export const metersToFeet = (meters: number): number => Math.round(meters * 3.28084);
+
+const COORDS_RE = /^\s*(-?\d{1,2}(?:\.\d+)?)[,\s]+(-?\d{1,3}(?:\.\d+)?)\s*$/;
+
+/** Parses "lat, lng" (or "lat lng") free text. Null if malformed or out of range. */
+export function parseLatLng(input: string): LngLat | null {
+  const m = COORDS_RE.exec(input);
+  if (!m) return null;
+  const [lat, lng] = [Number(m[1]), Number(m[2])];
+  if (Math.abs(lat) > 90 || Math.abs(lng) > 180) return null;
+  return [lng, lat];
+}
+
 /** [west, south, east, north] of a set of points, or null when empty. */
 export function bounds(coords: LngLat[]): [number, number, number, number] | null {
   if (coords.length === 0) return null;

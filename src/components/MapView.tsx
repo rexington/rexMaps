@@ -11,8 +11,9 @@ import {
   type MapMouseEvent,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { useEffect, useRef } from "react";
-import type { LngLat } from "@/lib/geo";
+import { useEffect, useRef, useState } from "react";
+import { elevationAt } from "@/lib/elevation";
+import { metersToFeet, type LngLat } from "@/lib/geo";
 import { buildStyle } from "@/lib/layers/compositor";
 import { loadOverlayInto, type CustomOverlayDef } from "@/lib/layers/customOverlay";
 import type { ActiveLayer } from "@/lib/layers/types";
@@ -213,6 +214,7 @@ function CustomOverlayData() {
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const buildSeq = useRef(0);
+  const [elevationM, setElevationM] = useState<number | null>(null);
   const stack = useMapStore((s) => s.stack);
   const sentinel = useMapStore((s) => s.sentinel);
   const customOverlays = useMapStore((s) => s.customOverlays);
@@ -321,6 +323,23 @@ export default function MapView() {
       }
     });
 
+    // DEM elevation readout at the cursor. Trailing-throttled: tile-cache
+    // hits resolve fast but are still async, and mousemove can fire well
+    // over 60/sec — only the latest pending point survives each tick.
+    const ELEVATION_THROTTLE_MS = 120;
+    let elevationTimer: ReturnType<typeof setTimeout> | null = null;
+    let pendingElevationPt: LngLat | null = null;
+    map.on("mousemove", (e) => {
+      pendingElevationPt = lngLat(e);
+      if (elevationTimer) return;
+      elevationTimer = setTimeout(() => {
+        elevationTimer = null;
+        const pt = pendingElevationPt;
+        if (pt) elevationAt(pt).then((m) => setElevationM(m));
+      }, ELEVATION_THROTTLE_MS);
+    });
+    map.on("mouseout", () => setElevationM(null));
+
     const onKeyDown = (e: KeyboardEvent) => {
       const target = e.target as HTMLElement | null;
       if (
@@ -380,6 +399,7 @@ export default function MapView() {
     return () => {
       unsubscribe();
       window.removeEventListener("keydown", onKeyDown);
+      if (elevationTimer) clearTimeout(elevationTimer);
       map.remove();
       mapRef.current = null;
     };
@@ -431,6 +451,11 @@ export default function MapView() {
       <LayerPanel />
       <ProfilePanel />
       <CustomOverlayData />
+      {elevationM !== null && (
+        <div className="absolute bottom-8 left-2 z-10 rounded-md bg-white/95 px-2 py-1 text-xs tabular-nums text-gray-700 shadow">
+          {metersToFeet(elevationM).toLocaleString()} ft
+        </div>
+      )}
     </div>
   );
 }

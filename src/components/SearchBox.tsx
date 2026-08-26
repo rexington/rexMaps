@@ -1,6 +1,7 @@
 "use client";
 
 import { useRef, useState } from "react";
+import { parseLatLng } from "@/lib/geo";
 import { mapRef } from "@/lib/mapRef";
 
 /**
@@ -16,8 +17,6 @@ interface Result {
   type?: string;
   boundingbox?: [string, string, string, string]; // [south, north, west, east]
 }
-
-const COORDS_RE = /^\s*(-?\d{1,2}(?:\.\d+)?)[,\s]+(-?\d{1,3}(?:\.\d+)?)\s*$/;
 
 function goTo(r: Result) {
   const map = mapRef.current;
@@ -54,14 +53,11 @@ export default function SearchBox() {
     const query = q.trim();
     if (!query) return;
 
-    const coords = COORDS_RE.exec(query);
+    const coords = parseLatLng(query);
     if (coords) {
-      const [lat, lng] = [Number(coords[1]), Number(coords[2])];
-      if (Math.abs(lat) <= 90 && Math.abs(lng) <= 180) {
-        mapRef.current?.flyTo({ center: [lng, lat], zoom: 13 });
-        setResults(null);
-        return;
-      }
+      mapRef.current?.flyTo({ center: coords, zoom: 13 });
+      setResults(null);
+      return;
     }
 
     setBusy(true);

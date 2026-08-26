@@ -1,7 +1,9 @@
 "use client";
 
-import { formatDistance, pathLength } from "@/lib/geo";
+import { useState } from "react";
+import { formatDistance, parseLatLng, pathLength } from "@/lib/geo";
 import { draftCursorPath } from "@/lib/layers/objectLayers";
+import { mapRef } from "@/lib/mapRef";
 import { legsToCoords } from "@/lib/objects";
 import { useMapStore, type Tool } from "@/store/mapStore";
 
@@ -77,6 +79,57 @@ export default function Toolbar() {
   );
 }
 
+/** Inline "lat, lng" entry for placing a marker without clicking the map —
+ * useful for a point you know the coordinates of but can't necessarily see
+ * on screen yet, so it also flies the camera there. */
+function AddMarkerByCoords() {
+  const addMarker = useMapStore((s) => s.addMarker);
+  const [value, setValue] = useState("");
+  const [error, setError] = useState(false);
+
+  function submit() {
+    const pt = parseLatLng(value);
+    if (!pt) {
+      setError(true);
+      return;
+    }
+    addMarker(pt);
+    const map = mapRef.current;
+    if (map) map.flyTo({ center: pt, zoom: Math.max(map.getZoom(), 13) });
+    setValue("");
+    setError(false);
+  }
+
+  return (
+    <form
+      onSubmit={(e) => {
+        e.preventDefault();
+        submit();
+      }}
+      className="flex items-center gap-1"
+    >
+      <input
+        value={value}
+        onChange={(e) => {
+          setValue(e.target.value);
+          setError(false);
+        }}
+        placeholder="or lat, lng"
+        className={`w-24 rounded-full bg-white/10 px-2 py-0.5 text-white placeholder:text-gray-400 outline-none ${
+          error ? "ring-1 ring-red-400" : ""
+        }`}
+        aria-label="Marker coordinates (lat, lng)"
+      />
+      <button
+        type="submit"
+        className="rounded-full bg-emerald-600 px-2 py-0.5 font-medium text-white hover:bg-emerald-500"
+      >
+        + Add
+      </button>
+    </form>
+  );
+}
+
 /** Floating hint + snap toggle + running distance while drawing. */
 export function DrawHint() {
   const tool = useMapStore((s) => s.tool);
@@ -104,6 +157,7 @@ export function DrawHint() {
   return (
     <div className="absolute bottom-6 left-2 right-16 z-10 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-2xl bg-gray-900/90 px-3 py-2 text-xs text-white shadow sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-14 sm:w-auto sm:max-w-none sm:-translate-x-1/2 sm:flex-nowrap sm:rounded-full sm:bg-gray-900/80 sm:px-4 sm:py-1.5">
       <span>{text}</span>
+      {tool === "marker" && <AddMarkerByCoords />}
       {draft && draft.waypoints.length >= minPoints && (
         <button
           onClick={draftFinish}
