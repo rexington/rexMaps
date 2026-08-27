@@ -708,6 +708,43 @@ until filled in). Needs the real values from Rex's Zero Trust dashboard
 Overview tab) before the deployed custom-overlays API will authenticate
 anyone.
 
+### Custom overlays: choose which WFS fields to load (done 2026-08-27)
+Rex's own WFS server (wfs.ke6mt.us, `rexington/sota-wfs` on GitHub) documents
+a manual CalTopo setup path using `PROPERTYNAME` to restrict which fields a
+WFS `GetFeature` request returns, and asked for the same ability here — not
+by accepting WFS 1.0/1.1-style pasted URLs (its README's manual templates
+use `VERSION=1.1.0`), just the field-restriction capability itself.
+
+Verified live against his server before assuming anything: **`PROPERTYNAME`
+works identically under the `VERSION=2.0.0` request shape this app already
+sends** — no need to carry a second request format just for this. Also
+verified geometry survives regardless of whether it's listed (his README's
+templates include `the_geom` defensively; empirically unnecessary against
+his server, and there's no way to verify it's unnecessary against WFS
+servers in general — the form's hint doesn't promise it either way).
+
+New optional `propertyNames` field on `CustomOverlayDef`, threaded through
+exactly like `labelField` (same layers, no new pattern): the add-overlay
+form, `parseCustomOverlayInput` (normalizes whitespace — `"a, b"` and `"a,b"`
+store and query identically — shared client/server as usual), the
+`custom_overlays` D1 table (`migrations/0003_custom_overlays_property_names.sql`,
+additive nullable `ALTER TABLE`, safe on existing rows), the API routes, and
+`wfsUrl()` in `customOverlay.ts`. One deliberate deviation from "just what
+the user typed": `wfsUrl()` always adds `labelField` to the request if it's
+missing from the property list, since a server that (unlike Rex's) doesn't
+unconditionally include its own styling fields would otherwise silently
+break the one field the map label depends on — simplestyle fields
+(`marker-color` etc.) are deliberately *not* auto-added the same way, since
+requesting a field a server doesn't have throws a WFS exception on some
+servers, and Rex's own already includes them regardless (verified).
+
+Verified end-to-end via CDP against the real server: the built request URL
+carries `PROPERTYNAME` with the normalized field list; points and labels
+both still render when the label field is left out of the typed list
+(auto-injected into the actual request, confirmed present in labels
+rendered). No edit UI exists for any overlay field (same scope line as the
+account-scoping pass above) — changing the list means delete and re-add.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These

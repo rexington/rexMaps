@@ -38,6 +38,15 @@ export interface CustomOverlayDef {
   color: string;
   /** Feature property to render as a map label; undefined = no labels. */
   labelField?: string;
+  /** Comma-separated WFS PROPERTYNAME list to restrict which attribute
+   * fields the server returns; undefined = every field (today's behavior).
+   * Geometry isn't a "property" in this sense — every server tested so far
+   * returns it regardless of this list. labelField is always included in
+   * the actual request even if left out here (see wfsUrl()), since a
+   * server that doesn't unconditionally include its own styling fields
+   * (unlike Rex's, verified 2026-08-27) would otherwise silently drop the
+   * one field the map label depends on. */
+  propertyNames?: string;
 }
 
 const EMPTY_FC: FeatureCollection = { type: "FeatureCollection", features: [] };
@@ -85,6 +94,15 @@ function wfsUrl(def: CustomOverlayDef, bbox: [number, number, number, number]): 
     // as the working sentinelScenes() query.
     BBOX: `${bbox[1]},${bbox[0]},${bbox[3]},${bbox[2]}`,
   });
+  if (def.propertyNames) {
+    // GeoServer honors PROPERTYNAME under VERSION=2.0.0 too (verified
+    // against wfs.ke6mt.us — its own README's manual-setup templates use
+    // 1.1.0, but 2.0.0 + PROPERTYNAME works identically there, so no need
+    // to carry two request shapes just for this).
+    const fields = def.propertyNames.split(",").map((f) => f.trim()).filter(Boolean);
+    if (def.labelField && !fields.includes(def.labelField)) fields.push(def.labelField);
+    if (fields.length) params.set("PROPERTYNAME", fields.join(","));
+  }
   return base + params.toString();
 }
 

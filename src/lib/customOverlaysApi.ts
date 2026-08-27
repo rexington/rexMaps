@@ -7,6 +7,20 @@ export interface CustomOverlayInput {
   typeName: string;
   color: string;
   labelField?: string;
+  /** Comma-separated WFS PROPERTYNAME list; undefined = every field. */
+  propertyNames?: string;
+}
+
+/** Splits on commas, trims each entry, drops empties, rejoins with bare
+ * commas — so "SummitCode, SummitName" and "SummitCode,SummitName" store
+ * and query identically, and a URLSearchParams-encoded space never ends up
+ * inside a field name the server then fails to recognize. */
+function normalizePropertyNames(raw: string): string | undefined {
+  const fields = raw
+    .split(",")
+    .map((f) => f.trim())
+    .filter(Boolean);
+  return fields.length ? fields.join(",") : undefined;
 }
 
 /**
@@ -17,7 +31,10 @@ export interface CustomOverlayInput {
  */
 export function parseCustomOverlayInput(body: unknown): CustomOverlayInput | null {
   if (typeof body !== "object" || body === null) return null;
-  const { name, url, typeName, color, labelField } = body as Record<string, unknown>;
+  const { name, url, typeName, color, labelField, propertyNames } = body as Record<
+    string,
+    unknown
+  >;
 
   if (typeof name !== "string" || !name.trim() || name.length > 200) return null;
   if (typeof url !== "string" || !url.trim()) return null;
@@ -29,6 +46,8 @@ export function parseCustomOverlayInput(body: unknown): CustomOverlayInput | nul
   if (typeof typeName !== "string" || !typeName.trim()) return null;
   if (typeof color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(color)) return null;
   if (labelField !== undefined && typeof labelField !== "string") return null;
+  if (propertyNames !== undefined && typeof propertyNames !== "string") return null;
+  if (typeof propertyNames === "string" && propertyNames.length > 500) return null;
 
   return {
     name: name.trim(),
@@ -36,6 +55,8 @@ export function parseCustomOverlayInput(body: unknown): CustomOverlayInput | nul
     typeName: typeName.trim(),
     color,
     labelField: labelField?.trim() || undefined,
+    propertyNames:
+      typeof propertyNames === "string" ? normalizePropertyNames(propertyNames) : undefined,
   };
 }
 

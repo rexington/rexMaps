@@ -10,6 +10,7 @@ type Row = {
   type_name: string;
   color: string;
   label_field: string | null;
+  property_names: string | null;
 };
 
 function toDef(row: Row): CustomOverlayDef {
@@ -22,6 +23,7 @@ function toDef(row: Row): CustomOverlayDef {
     typeName: row.type_name,
     color: row.color,
     labelField: row.label_field ?? undefined,
+    propertyNames: row.property_names ?? undefined,
   };
 }
 
@@ -31,7 +33,7 @@ export async function GET(req: Request) {
   if (!owner) return Response.json({ error: "unauthorized" }, { status: 401 });
 
   const { results } = await env.DB.prepare(
-    "SELECT id, name, url, type_name, color, label_field FROM custom_overlays WHERE owner = ?1 ORDER BY created_at",
+    "SELECT id, name, url, type_name, color, label_field, property_names FROM custom_overlays WHERE owner = ?1 ORDER BY created_at",
   )
     .bind(owner)
     .all<Row>();
@@ -49,9 +51,18 @@ export async function POST(req: Request) {
 
   const id = crypto.randomUUID();
   await env.DB.prepare(
-    "INSERT INTO custom_overlays (id, owner, name, url, type_name, color, label_field) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+    "INSERT INTO custom_overlays (id, owner, name, url, type_name, color, label_field, property_names) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
   )
-    .bind(id, owner, input.name, input.url, input.typeName, input.color, input.labelField ?? null)
+    .bind(
+      id,
+      owner,
+      input.name,
+      input.url,
+      input.typeName,
+      input.color,
+      input.labelField ?? null,
+      input.propertyNames ?? null,
+    )
     .run();
 
   return Response.json(
@@ -62,6 +73,7 @@ export async function POST(req: Request) {
       type_name: input.typeName,
       color: input.color,
       label_field: input.labelField ?? null,
+      property_names: input.propertyNames ?? null,
     }),
     { status: 201 },
   );

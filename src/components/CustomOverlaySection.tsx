@@ -12,6 +12,7 @@ export default function CustomOverlaySection() {
   const [url, setUrl] = useState("");
   const [typeName, setTypeName] = useState("");
   const [labelField, setLabelField] = useState("");
+  const [propertyNames, setPropertyNames] = useState("");
   const [color, setColor] = useState<string>(OBJECT_COLORS[4]);
   const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
@@ -28,6 +29,7 @@ export default function CustomOverlaySection() {
     setUrl("");
     setTypeName("");
     setLabelField("");
+    setPropertyNames("");
     setFormError(null);
     setForming(false);
   }
@@ -39,6 +41,7 @@ export default function CustomOverlaySection() {
       typeName,
       color,
       labelField: labelField.trim() || undefined,
+      propertyNames: propertyNames.trim() || undefined,
     });
     if (!input) {
       setFormError(
@@ -117,6 +120,13 @@ export default function CustomOverlaySection() {
                 className={input}
                 aria-label="Label field"
               />
+              <input
+                value={propertyNames}
+                onChange={(e) => setPropertyNames(e.target.value)}
+                placeholder="Fields to load (optional, comma-separated — blank = all)"
+                className={input}
+                aria-label="Fields to load"
+              />
               <div className="flex items-center gap-1 px-0.5">
                 {OBJECT_COLORS.map((c) => (
                   <button
@@ -151,7 +161,10 @@ export default function CustomOverlaySection() {
                 Needs a WFS 2.0 endpoint that supports GeoJSON output and allows
                 cross-origin requests — this app has no server-side proxy, so a source
                 without CORS simply won&apos;t load (it may still open fine in a plain
-                browser tab).
+                browser tab). Fields to load restricts the server response to just
+                those attributes (your label field always rides along even if you
+                leave it out of the list). Nothing here can be edited later — delete
+                and re-add to change any of it.
               </p>
             </div>
           )}
