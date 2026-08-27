@@ -571,6 +571,59 @@ optional below-marker `labelField` text. Verified against real summits
 Named Maki icons (e.g. `"campsite"`) remain deferred, per the same
 undocumented-vocabulary reasoning above.
 
+### Custom overlays: stop refetching on opacity, debounce pan/zoom (done 2026-08-26)
+Rex noticed a "Loading…" flicker (layout shift in LayerPanel) whenever
+changing *any* layer's opacity, not just while panning/zooming — and asked
+directly whether opacity changes were hitting the WFS server. They were:
+every style rebuild refetched every active overlay unconditionally, and
+`setOpacity()` on any stack entry (including an unrelated layer) produces a
+new `stack` array reference, which the rebuild effect treats as a change.
+Verified via real network capture (not just code reading) before and after
+the fix — 5 opacity changes in a row now produce exactly 0 WFS requests,
+whether on the overlay's own entry or a completely different layer.
+
+Fixed by keying the refetch (both the post-setStyle "populate a freshly-
+active overlay" call and `CustomOverlayData`'s viewport-driven refetch) on a
+derived signature — the sorted set of overlay ids actually rendered
+(`visible && opacity > 0`, mirroring the compositor's own skip condition
+exactly) — instead of the raw `stack`/`customOverlays` array references.
+Opacity moving within (0, 1] no longer changes the signature at all; it
+only changes crossing the 0 boundary or on add/remove/visibility-toggle,
+which correctly still refetch (verified: hide → 0 requests, show again → 1).
+Also bumped the pan/zoom settle debounce 400ms → 800ms per Rex's request, so
+a flurry of small adjustments coalesces into one fetch instead of firing
+after every brief pause — verified 5 rapid pans ~150ms apart produce exactly
+1 request, timed after the last one.
+
+**Real regression caught mid-fix, worth remembering generally**: the first
+version of this fix wrote the "have we already refetched this signature"
+ref eagerly at the top of the effect, before the async `buildStyle()` call
+resolved. Next's dev-mode Strict Mode double-invokes effects on mount
+(mount → cleanup → mount again) — the first invocation's cleanup set
+`cancelled = true`, but by then it had already written the ref, so the
+*surviving* second invocation saw "signature unchanged" and skipped its own
+fetch entirely. Net effect: a brand-new overlay's source loaded 0 features
+on first render, no error, nothing in the console — the kind of bug that
+only real load-then-inspect verification catches, not code review. Fixed by
+moving the compare-and-set inside the same `cancelled`/`seq` guard the
+fetch itself already used, so a cancelled run can never claim the
+signature.
+
+**Second real bug, caught by Rex after deploy**: gating the *refetch* wasn't
+enough — the *style rebuild itself* still runs on every opacity change
+(`stack` changes reference regardless of which field changed), and the
+compositor always seeds a custom overlay's source with an empty
+FeatureCollection, full stop, since a plain style spec has no way to encode
+"whatever was last fetched." Without a real refetch to repopulate it, an
+opacity-only rebuild left every custom overlay blank until the next pan/zoom
+happened to trigger one. Fixed by caching each overlay's last successfully
+fetched FeatureCollection (`cachedOverlayData()` in customOverlay.ts) and
+reapplying it via `setData()` right after *every* rebuild, unconditionally —
+cheap, no network, keeps the display continuous — while the actual refetch
+stays gated on the signature exactly as before. Verified live: 60 rendered
+point features immediately before and after an opacity change on an
+unrelated layer, 0 requests either way.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These

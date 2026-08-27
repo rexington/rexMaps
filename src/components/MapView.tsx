@@ -15,7 +15,12 @@ import { useEffect, useRef, useState } from "react";
 import { elevationAt } from "@/lib/elevation";
 import { metersToFeet, type LngLat } from "@/lib/geo";
 import { buildStyle } from "@/lib/layers/compositor";
-import { loadOverlayInto, type CustomOverlayDef } from "@/lib/layers/customOverlay";
+import {
+  cachedOverlayData,
+  customSourceId,
+  loadOverlayInto,
+  type CustomOverlayDef,
+} from "@/lib/layers/customOverlay";
 import type { ActiveLayer } from "@/lib/layers/types";
 import {
   DRAFT_SOURCE,
@@ -148,18 +153,33 @@ function showCustomOverlayPopup(map: MaplibreMap, e: MapMouseEvent) {
     .addTo(map);
 }
 
-/** Active custom-overlay defs currently visible in the stack. */
+/** Custom-overlay defs whose source is actually present in the applied
+ * style right now — mirrors the compositor's own skip condition exactly
+ * (`!entry.visible || entry.opacity === 0`), since those are the only
+ * entries the compositor gives a source to at all. */
 function activeCustomOverlays(
   stack: ActiveLayer[],
   customOverlays: CustomOverlayDef[],
 ): CustomOverlayDef[] {
   const out: CustomOverlayDef[] = [];
   for (const l of stack) {
-    if (!l.visible) continue;
+    if (!l.visible || l.opacity === 0) continue;
     const def = customOverlays.find((c) => c.id === l.defId);
     if (def) out.push(def);
   }
   return out;
+}
+
+/** Stable key for "which overlays are actually rendered," independent of
+ * opacity value/order/any other stack entry — deliberately does NOT change
+ * on an ordinary opacity slider drag, so that alone can't retrigger a WFS
+ * refetch (verified this was happening: any stack-array change, including
+ * an unrelated layer's opacity, re-fired the fetch unconditionally). */
+function overlaySignature(active: CustomOverlayDef[]): string {
+  return active
+    .map((d) => d.id)
+    .sort()
+    .join(",");
 }
 
 function currentBbox(map: MaplibreMap): [number, number, number, number] {
@@ -183,6 +203,12 @@ function refreshCustomOverlays(
   }
 }
 
+// Settle period after the viewport (or the set of active overlays) changes
+// before actually refetching — long enough that a flurry of small pan/zoom
+// adjustments over a second or two coalesces into one fetch at the end,
+// rather than firing after every brief pause.
+const VIEWPORT_SETTLE_MS = 800;
+
 /** Live-refetches active custom overlays as the user pans/zooms. Rendered
  * unconditionally from MapView's JSX (not inside a collapsible panel) — a
  * layer's data source has to keep updating even while LayerPanel is closed,
@@ -192,21 +218,26 @@ function CustomOverlayData() {
   const customOverlays = useMapStore((s) => s.customOverlays);
   const viewport = useMapStore((s) => s.viewport);
   const setStatus = useMapStore((s) => s.setCustomOverlayStatus);
+  const active = activeCustomOverlays(stack, customOverlays);
+  const signature = overlaySignature(active);
 
   useEffect(() => {
     const map = mapRef.current;
-    if (!map) return;
-    const active = activeCustomOverlays(stack, customOverlays);
-    if (active.length === 0) return;
+    if (!map || active.length === 0) return;
     const controller = new AbortController();
     const t = setTimeout(() => {
       refreshCustomOverlays(map, active, controller.signal, setStatus);
-    }, 400);
+    }, VIEWPORT_SETTLE_MS);
     return () => {
       clearTimeout(t);
       controller.abort();
     };
-  }, [stack, customOverlays, viewport, setStatus]);
+    // `active` is recomputed fresh every render from the same inputs
+    // `signature` already captures (plus viewport) — depending on it
+    // directly would defeat the point of a stable key (a new array every
+    // render), so it's intentionally left out here.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [signature, viewport, setStatus]);
 
   return null;
 }
@@ -214,6 +245,7 @@ function CustomOverlayData() {
 export default function MapView() {
   const containerRef = useRef<HTMLDivElement>(null);
   const buildSeq = useRef(0);
+  const prevOverlaySig = useRef<string>("");
   const [elevationM, setElevationM] = useState<number | null>(null);
   const stack = useMapStore((s) => s.stack);
   const sentinel = useMapStore((s) => s.sentinel);
@@ -411,6 +443,14 @@ export default function MapView() {
   useEffect(() => {
     const seq = ++buildSeq.current;
     let cancelled = false;
+    // Custom-overlay sources are always seeded empty by the compositor, so a
+    // rebuild needs to repopulate them — but only the ones that just became
+    // active. Every style rebuild (any stack change at all — including an
+    // unrelated layer's opacity) used to unconditionally refetch every
+    // active overlay; gating on the signature is what stops an opacity drag
+    // from hitting the WFS server.
+    const active = activeCustomOverlays(stack, customOverlays);
+    const signature = overlaySignature(active);
     buildStyle(stack, currentObjectsFC(), currentDraftFC(), {
       trailOverlay,
       customOverlays,
@@ -421,14 +461,26 @@ export default function MapView() {
       map.setStyle(style, { diff: true });
       // Defensive: re-ensure marker images in case setStyle reset them.
       ensureMarkerIcons(map, useMapStore.getState().objects);
-      // Custom-overlay sources are always seeded empty by the compositor —
-      // populate them now that they actually exist in the applied style.
-      refreshCustomOverlays(
-        map,
-        activeCustomOverlays(stack, customOverlays),
-        undefined,
-        useMapStore.getState().setCustomOverlayStatus,
-      );
+      // The rebuild just recreated every active overlay's source empty —
+      // restore whatever was already displayed, no network involved. Without
+      // this, any rebuild NOT triggered by a real data change (an unrelated
+      // layer's opacity, sentinel/trailOverlay state) would blank overlays
+      // out until the next real fetch happened to run.
+      for (const def of active) {
+        const cached = cachedOverlayData(def.id);
+        if (!cached) continue;
+        (map.getSource(customSourceId(def.id)) as GeoJSONSource | undefined)?.setData(cached);
+      }
+      // Compare-and-set only here, past the cancellation guard above — Next
+      // dev's Strict Mode double-invokes this effect (mount, cleanup, mount
+      // again) on first render; if the ref were written eagerly at the top
+      // of the effect, the first (cancelled) invocation would claim the
+      // signature and the surviving invocation would see "no change" and
+      // skip the fetch entirely, silently leaving new overlays empty.
+      if (signature !== prevOverlaySig.current) {
+        prevOverlaySig.current = signature;
+        refreshCustomOverlays(map, active, undefined, useMapStore.getState().setCustomOverlayStatus);
+      }
     });
     return () => {
       cancelled = true;

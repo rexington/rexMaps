@@ -42,6 +42,19 @@ export interface CustomOverlayDef {
 
 const EMPTY_FC: FeatureCollection = { type: "FeatureCollection", features: [] };
 
+/** Last successfully fetched data per overlay. The compositor always seeds a
+ * custom overlay's source empty (a plain style spec has no other way to
+ * represent "whatever was last fetched") — so a style rebuild triggered by
+ * anything unrelated (another layer's opacity, sentinel/trailOverlay state)
+ * recreates the source empty too. MapView reapplies this cache right after
+ * every rebuild, with no network involved, so the display doesn't blank out
+ * until the next real fetch actually runs. */
+const lastGoodData = new Map<string, FeatureCollection>();
+
+export function cachedOverlayData(id: string): FeatureCollection | undefined {
+  return lastGoodData.get(id);
+}
+
 // A cap this codebase has already found necessary once (Esri's own
 // maxRecordCount is typically 1000-2000). Rather than trust any given WFS
 // server to honor COUNT/resultType=hits — one already didn't, see the
@@ -244,6 +257,7 @@ export async function loadOverlayInto(
   const result = await fetchOverlayFeatures(def, bbox, signal);
   if (signal?.aborted) return;
   if ("data" in result) {
+    lastGoodData.set(def.id, result.data);
     const src = map.getSource(customSourceId(def.id)) as GeoJSONSource | undefined;
     src?.setData(result.data);
     setStatus(def.id, { loading: false, error: null });
