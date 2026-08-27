@@ -24,7 +24,7 @@ import {
 } from "@/lib/layers/sentinel";
 import type { ActiveLayer, LayerDef } from "@/lib/layers/types";
 import { mapRef } from "@/lib/mapRef";
-import { useMapStore } from "@/store/mapStore";
+import { removeCustomOverlayDef, useMapStore } from "@/store/mapStore";
 import CustomOverlaySection from "./CustomOverlaySection";
 import OfflineSection from "./OfflineSection";
 
@@ -135,7 +135,7 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
   const customOverlays = useMapStore((s) => s.customOverlays);
   const status = useMapStore((s) => s.customOverlayStatus[entry.defId]);
   const def = layerDef(entry.defId) ?? customOverlays.find((c) => c.id === entry.defId);
-  const { setOpacity, toggleVisible, removeLayer, removeCustomOverlayDef } = useMapStore();
+  const { setOpacity, toggleVisible, removeLayer } = useMapStore();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: entry.defId });
 
@@ -209,7 +209,10 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
         <button
           onClick={() => {
             if (confirm(`Delete "${def.name}"? This forgets the saved URL, not just hides it.`))
-              removeCustomOverlayDef(entry.defId);
+              removeCustomOverlayDef(entry.defId).catch((err) => {
+                console.warn("failed to delete custom overlay", err);
+                alert("Couldn't delete that overlay — try again.");
+              });
           }}
           className="mt-1 pl-6 text-xs text-gray-400 hover:text-red-600"
         >

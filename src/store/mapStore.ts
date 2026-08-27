@@ -11,6 +11,12 @@ import type { CustomOverlayDef } from "@/lib/layers/customOverlay";
 import { layerDef } from "@/lib/layers/registry";
 import { isVectorKind, type ActiveLayer } from "@/lib/layers/types";
 import { routeLeg } from "@/lib/routing";
+import {
+  createCustomOverlay,
+  deleteCustomOverlay,
+  listCustomOverlays,
+  type CustomOverlayInput,
+} from "@/lib/customOverlaysApi";
 
 export interface Viewport {
   lng: number;
@@ -84,11 +90,15 @@ interface MapStore {
   clearOfflinePacks: () => void;
 
   // Custom overlays (user-supplied WFS catalogs, e.g. a SOTA summits server).
-  // Definitions are device-local like offlinePacks — not part of saved maps.
+  // Private per account, server-backed (see src/lib/customOverlaysApi.ts) —
+  // NOT part of this store's localStorage persistence. Populated once by
+  // loadCustomOverlays() (called from MapView's init effect); mutated via
+  // the exported addCustomOverlay/removeCustomOverlayDef functions below,
+  // which hit the API first and only update local state on success.
   customOverlays: CustomOverlayDef[];
-  addCustomOverlay: (def: Omit<CustomOverlayDef, "id" | "kind" | "protocol">) => void;
-  /** Forgets the definition entirely (not just hides it — see removeLayer for that). */
-  removeCustomOverlayDef: (id: string) => void;
+  /** True once the initial server fetch has completed (success or not) —
+   * lets the UI distinguish "still loading" from "genuinely zero overlays". */
+  customOverlaysLoaded: boolean;
   /** Runtime-only fetch status per overlay id, keyed for LayerPanel display. */
   customOverlayStatus: Record<string, { loading: boolean; error: string | null }>;
   setCustomOverlayStatus: (id: string, status: { loading: boolean; error: string | null }) => void;
@@ -182,6 +192,7 @@ export const useMapStore = create<MapStore>()(
       dirty: false,
       offlinePacks: [],
       customOverlays: [],
+      customOverlaysLoaded: false,
       customOverlayStatus: {},
 
       setSentinel: (patch) =>
@@ -197,22 +208,6 @@ export const useMapStore = create<MapStore>()(
         set((s) => ({ offlinePacks: s.offlinePacks.filter((p) => p.id !== id) })),
       clearOfflinePacks: () => set({ offlinePacks: [] }),
 
-      addCustomOverlay: (def) =>
-        set((s) => {
-          const id = crypto.randomUUID();
-          const full: CustomOverlayDef = { id, kind: "feature-query", protocol: "wfs", ...def };
-          return {
-            customOverlays: [...s.customOverlays, full],
-            stack: [...s.stack, { defId: id, visible: true, opacity: 1 }],
-            dirty: true,
-          };
-        }),
-      removeCustomOverlayDef: (id) =>
-        set((s) => ({
-          customOverlays: s.customOverlays.filter((c) => c.id !== id),
-          stack: s.stack.filter((l) => l.defId !== id),
-          dirty: true,
-        })),
       setCustomOverlayStatus: (id, status) =>
         set((s) => ({ customOverlayStatus: { ...s.customOverlayStatus, [id]: status } })),
 
@@ -415,7 +410,6 @@ export const useMapStore = create<MapStore>()(
         currentMap: s.currentMap,
         dirty: s.dirty,
         offlinePacks: s.offlinePacks,
-        customOverlays: s.customOverlays,
       }),
       migrate: (persisted) => persisted as MapStore,
     },
@@ -628,4 +622,42 @@ export async function refitObjectVertex(id: string, idx: number) {
       console.warn("re-route after vertex edit failed; leg stays straight", err);
     }
   }
+}
+
+/** Fetches this account's custom overlays from the server. Called once from
+ * MapView's init effect — not persisted locally, so this is the only way
+ * customOverlays gets populated after a page load. */
+export async function loadCustomOverlays() {
+  try {
+    const overlays = await listCustomOverlays();
+    useMapStore.setState({ customOverlays: overlays, customOverlaysLoaded: true });
+  } catch (err) {
+    console.warn("failed to load custom overlays", err);
+    useMapStore.setState({ customOverlaysLoaded: true });
+  }
+}
+
+/** Creates an overlay on the server, then adds it (and activates it) locally
+ * on success. Throws on failure — callers show the error inline. */
+export async function addCustomOverlay(input: CustomOverlayInput): Promise<CustomOverlayDef> {
+  const created = await createCustomOverlay(input);
+  useMapStore.setState((s) => ({
+    customOverlays: [...s.customOverlays, created],
+    stack: [...s.stack, { defId: created.id, visible: true, opacity: 1 }],
+    dirty: true,
+  }));
+  return created;
+}
+
+/** Deletes an overlay on the server, then forgets it locally on success
+ * (not just hides it — see removeLayer for that). Local state — including
+ * removing it from `stack` — only changes after the API call succeeds, so a
+ * failed request never leaves the UI out of sync with the server. */
+export async function removeCustomOverlayDef(id: string): Promise<void> {
+  await deleteCustomOverlay(id);
+  useMapStore.setState((s) => ({
+    customOverlays: s.customOverlays.filter((c) => c.id !== id),
+    stack: s.stack.filter((l) => l.defId !== id),
+    dirty: true,
+  }));
 }

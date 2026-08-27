@@ -624,6 +624,90 @@ stays gated on the signature exactly as before. Verified live: 60 rendered
 point features immediately before and after an opacity change on an
 unrelated layer, 0 requests either way.
 
+### Account-scoped storage: identity verification + custom overlays go server-side (done 2026-08-27)
+Rex asked whether custom WFS overlays are saved — they weren't; `customOverlays`
+lived only in this store's localStorage `persist`, so a new browser/device saw
+none of them. That surfaced a real architecture gap: rexMaps has never had any
+per-user concept — `maps` is (and remains) one shared D1 pool, and nothing in
+the app ever reads *who* is asking. Rex chose **private per person** ("like
+CalTopo — a layer another user can't access just doesn't show for them") and
+used the moment to lay out a longer roadmap: user accounts, other identity
+providers (Google etc.), a layer-vs-overlay toggle for custom sources, no-auth
+map sharing, and a mobile-native app. Scoped this pass to the concrete,
+unblocking piece — custom overlays, now server-backed and private per account
+— and left the rest as backlog (see table below), each item noting what this
+pass does or doesn't set up for it.
+
+**Identity, not auth** — this does not add in-app authentication, which
+AGENTS.md rules out (Access at the edge is the only auth boundary). It reads
+the identity Access already established for the request. `src/lib/access.ts`
+cryptographically verifies the `Cf-Access-Jwt-Assertion` JWT against Access's
+own JWKS (`https://<team-domain>/cdn-cgi/access/certs`, fetched live — keys
+rotate every ~6 weeks, never hardcoded) and checks `iss`/`aud`, rather than
+trusting the `Cf-Access-Authenticated-User-Email` header alone (that header
+isn't itself authenticated as far as the Worker can tell). Verified against
+Cloudflare's own current docs, not prior training knowledge — a deliberate
+retrieval given this is a security-relevant design choice. The identity itself
+is treated as an **opaque string** (not assumed email-shaped) so a second IdP
+later (backlog #2) needs no rework here.
+
+**New D1 table**: `custom_overlays(id, owner, name, url, type_name, color,
+label_field, created_at)` (`migrations/0002_create_custom_overlays.sql`) —
+`owner` is the verified identity string; every query is scoped to it
+(`WHERE owner = ?1`), including deletes (`WHERE id = ?1 AND owner = ?2`, so
+guessing another id can't delete someone else's row — verified live: seeded a
+second owner's row directly in D1, confirmed DELETE against it 404s while
+DELETE against your own row succeeds). `maps` is deliberately untouched —
+still the one shared pool; retrofitting ownership onto it is backlog, not
+this pass.
+
+**API**: `/api/custom-overlays` (GET list / POST create) and
+`/api/custom-overlays/[id]` (DELETE), mirroring the existing `/api/maps`
+route shape (`getCloudflareContext().env.DB`). POST validates server-side
+(`parseCustomOverlayInput` in `src/lib/customOverlaysApi.ts` — https-only URL,
+non-empty fields, 6-hex color) since this is now a real endpoint any
+Access-authenticated family member can reach directly, not just through the
+form; the same validator runs client-side too so the check exists once.
+
+**Client refactor**: `customOverlays` came out of the zustand `persist`
+partialize list entirely — it's fetched once from the server
+(`loadCustomOverlays()`, called from `MapView`'s init effect) rather than
+rehydrated from localStorage. `addCustomOverlay`/`removeCustomOverlayDef`
+changed from synchronous store methods to plain exported async functions
+(matching the existing `appendDraftPoint`/`refitObjectVertex` pattern) that
+call the API first and only touch local state — including removing an id from
+`stack` — on success, so a failed request can't leave the UI showing something
+the server doesn't have. A new `customOverlaysLoaded` flag lets the UI
+distinguish "still loading" from "genuinely zero overlays."
+
+**Startup-order race, checked rather than assumed**: a saved map's `stack`
+can reference a custom-overlay id before the async `loadCustomOverlays()`
+fetch resolves (`stack` itself still rehydrates synchronously from
+localStorage). Verified via CDP — seeded `stack` with a real overlay id on a
+fresh load — that this self-heals with no manual pan/zoom: `customOverlays`
+arrives, the build effect's existing dependency on it fires, the overlay's
+signature flips from absent to present, and 60 features render. `stack`
+referencing an overlay owned by someone else (relevant once maps/sharing
+exist) is left to silently omit, per Rex's own "like CalTopo" framing — no
+error path needed there.
+
+**Local dev**: Access itself never fronts `next dev`/`opennextjs-cloudflare
+preview` — no real JWT is ever available to verify locally. Added a
+`CF_ACCESS_DEV_IDENTITY` escape hatch, checked first before any JWT
+verification runs, in `.dev.vars` only — so both `dev` and `preview` stay
+fully testable locally. Deliberately absent from `wrangler.jsonc`'s `vars`
+and must never become a deployed secret, or the real Worker would trust any
+request as that identity. Verified the fail-closed direction too: with the
+var unset and no real Access JWT present, the API 401s rather than falling
+back to anything.
+
+**Not yet live**: `wrangler.jsonc`'s `vars.CF_ACCESS_TEAM_DOMAIN` /
+`CF_ACCESS_AUD` are placeholders (empty string — fails closed, not open,
+until filled in). Needs the real values from Rex's Zero Trust dashboard
+(team domain: Settings → Custom Pages; AUD: the rexmaps Access application's
+Overview tab) before the deployed custom-overlays API will authenticate
+anyone.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These
@@ -635,7 +719,7 @@ data-sourcing/research risk, or multiple sessions.
 | # | Effort | Category | Item | Notes |
 |---|--------|----------|------|-------|
 | 1 | S | Drawing/Objects | ✅ Per-object opacity; adjustable width for polygon outlines + marker size | Done 2026-08-25 — see notes below |
-| 2 | S | Access | Google as a 2nd identity provider | For friends outside the `vokey.org` domain policy; needs a Google Cloud Console OAuth client (personal Gmail works, confirmed against current docs during Stage 5) |
+| 2 | S | Access | Google as a 2nd identity provider | For friends outside the `vokey.org` domain policy; needs a Google Cloud Console OAuth client (personal Gmail works, confirmed against current docs during Stage 5). `src/lib/access.ts` already treats identity as an opaque string, so this is dashboard config + maybe a second accepted issuer, not a rework |
 | 3 | M | Drawing/Objects | ✅ Line/track simplification | Done 2026-08-25 — see notes below |
 | 4 | M | Drawing/Objects | ✅ Marker styles — icon picker, CalTopo-style but better | Done 2026-08-25 — see notes below |
 | 5 | M | Saved maps | Folders for saved maps | New D1 table (`folders`) + API route + UI grouping in the saved-maps list — second table in the schema, first one was just `maps` |
@@ -646,8 +730,13 @@ data-sourcing/research risk, or multiple sessions.
 | 10 | L | Layers/Data | Private land ownership (parcels) | No free unified national dataset — parcels are county-by-county, wildly inconsistent. May be better solved *by* item 9 (let Rex plug in his own county's GIS parcel service) than by rexMaps building/maintaining a national layer |
 | 11 | L | Layers/Data | Classic scanned FSTopo quads, self-hosted | Real data pipeline: georeferenced GeoTIFFs from USFS FSGeodata → PMTiles → R2, plus a new tile protocol to serve them (same shape as the `slope://`/`sentinel://` custom protocols) |
 | 12 | L | Layers/Data | Weather (NOAA forecast grids) + snow depth (SNODAS) overlays | Not simple XYZ tiles — GRIB/WMS sources likely need real conversion, unlike the ArcGIS-pattern layers above |
-| 13 | L | Collaboration | Map sharing / multi-user / live location sharing | Needs Durable Objects + WebSockets (worker-level Access 403s on WebSocket upgrades — see Stage 5 — so this hostname would need to switch to a classic hostname-scoped Access app); also revisits the current single-policy Auth model |
+| 13 | L | Collaboration | Live multi-user / live location sharing | Needs Durable Objects + WebSockets (worker-level Access 403s on WebSocket upgrades — see Stage 5 — so this hostname would need to switch to a classic hostname-scoped Access app); also revisits the current single-policy Auth model |
 | 14 | L (gated) | Infra | Worker-proxy + R2/Cache tile caching for Sentinel | **Only relevant if the app goes multi-user** — quota is per CDSE instance ID. Pointless solo: ~1–2k of the 10k monthly requests used, and the rolling `TIME` window makes recent-imagery tiles cache-hostile anyway. Google tiles excluded regardless (ToS forbids caching/proxying) |
+| 15 | S | Layers/Data | ✅ Custom overlays: private per-account, server-backed | Done 2026-08-27 — see notes above. Identity-verification foundation (`src/lib/access.ts`) this row's approach reuses |
+| 16 | M | Saved maps | Ownership retrofit on `maps` | Add an `owner` column + scope `/api/maps`, mirroring `custom_overlays`'s pattern exactly — deliberately not bundled into #15 since `maps` being a shared pool was a known, accepted state, not a bug |
+| 17 | M | Layers/Data | Layer-vs-overlay toggle for custom sources | Let a custom WFS source be treated as a base layer (bottom-insertion, vector-exclusivity rules) instead of always an overlay — `addLayer()`'s vector/raster insertion logic in mapStore.ts would need a third case |
+| 18 | M | Collaboration | No-auth map sharing (share link, read-only) | Distinct from #13 — a single map made viewable without Cloudflare Access, e.g. a signed/opaque share token checked in the route handler rather than through the edge Access policy. Needs its own threat-model pass since it's the one deliberate hole in "everything sits behind Access" |
+| 19 | L | Platform | Mobile-native app (iOS, then Android) | Rex-stated future direction, no design work done yet. `maps`/`custom_overlays` already being real API-backed (not just localStorage) is what makes this feasible at all — a native client would talk to the same `/api/*` routes |
 
 ## Decision log
 - **2026-08-24** Platform: Cloudflare Workers + OpenNext (user pref #1; free tier covers personal use). Scaffolded with create-next-app directly because C3's framework flow now insists on an interactive vinext/OpenNext prompt; OpenNext chosen deliberately (mature, well-documented).
@@ -667,4 +756,5 @@ data-sourcing/research risk, or multiple sessions.
 - **2026-08-25** Custom domain `maps.ke6mt.us` added (Rex's existing zone) and confirmed working. Access plan revised: use **worker-level Access** (Workers & Pages → Access tab → "Protect this Worker behind Access"), a feature that shipped 2026-08-14 — it covers the custom domain *and* the `workers.dev` fallback from one Worker-scoped Access app, so there's no separate "protect two hostnames or disable one" step. Confirmed against current developers.cloudflare.com docs, not prior knowledge (docs had recently moved to `access-controls/applications/http-apps/...`). Caveat recorded: it 403s on WebSocket upgrades, relevant if the backlog's live-location-sharing idea ever ships.
 - **2026-08-25** Access configured and live: policy allows the `vokey.org` email domain (not a single address) — deliberate, Rex is fine with family members having access. **Stage 5 complete.** Google as a second IdP (for friends outside the family domain) backlogged, confirmed against current docs: needs a Google Cloud Console OAuth client, works with personal Gmail.
 - **2026-08-25** Top bar overlap fix: `ObjectsPanel` and `LayerPanel` were both anchored `top-2` like the centered Toolbar/SearchBox row, so at moderate window widths (confirmed overlapping by ~950px wide with the search box open) the corner panels' expanded content visually collided with the map tools. Fixed by moving both corner panels to `top-14`, clearing the tools row entirely regardless of viewport width, rather than a full flex/grid rewrite of the four independently-absolutely-positioned top overlays. `max-h-[calc(100dvh-Xrem)]` scroll caps adjusted from 5rem to 8rem to preserve the same bottom clearance.
+- **2026-08-27** Account/ownership architecture: chose **private per person** over a shared pool for anything new (Rex, deliberately — "like CalTopo," an inaccessible layer just doesn't show). Built the identity-verification foundation (`src/lib/access.ts` — verifies the Access JWT, not the authenticated-user-email header) and applied it to custom overlays first, since that gap was concrete and already found (localStorage-only, invisible on a second device). `maps` stays a shared pool for now; retrofitting ownership onto it is backlog #16, not bundled into this pass. Longer roadmap (2nd IdP, layer/overlay toggle, no-auth sharing, mobile-native) captured as backlog #2/#17/#18/#19.
 - **2026-08-24** Stage 4: Sentinel imagery via **CDSE Sentinel Hub WMTS** (user created a CDSE account; 10 m beats GIBS HLS's 30 m; free tier 10k req/mo). Slope shading is computed client-side through a MapLibre custom protocol rather than pre-rendered tiles — zero hosting cost, works offline once DEM tiles are cached, and reuses the Terrarium pipeline from elevation profiles. Nominatim search is Enter-only to respect their no-autocomplete policy. Line hit-testing got a ±4 px box (user feedback: thin lines were hard to click); object rename input got an explicit white background (was transparent over the panel).

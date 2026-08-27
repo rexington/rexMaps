@@ -17,6 +17,17 @@
 	"observability": {
 		"enabled": true
 	},
+	// Cloudflare Access identity verification (src/lib/access.ts) — used to
+	// scope custom overlays per person. Not secret: knowing these two values
+	// alone doesn't let anyone forge a valid JWT (verification is against
+	// Access's own JWKS), so plain vars are fine here rather than
+	// `wrangler secret put`. Fill in from Zero Trust: team domain is under
+	// Settings → Custom Pages; AUD tag is on the rexmaps Access application's
+	// Overview tab. Empty until filled in below fails closed (401), not open.
+	"vars": {
+		"CF_ACCESS_TEAM_DOMAIN": "vokey.cloudflareaccess.com",
+		"CF_ACCESS_AUD": "514bfb452d6999b47427811034483659134088fbb4fd93242e5abcedf893721c"
+	},
 	// Saved maps. Local dev uses Miniflare's local D1 (the id is ignored);
 	// the id below is the real remote database (created 2026-08-24).
 	"d1_databases": [

@@ -33,6 +33,7 @@ import { ensureMarkerIcons } from "@/lib/markerIcons";
 import { objectsToFeatureCollection } from "@/lib/objects";
 import {
   appendDraftPoint,
+  loadCustomOverlays,
   moveObjectVertex,
   refitObjectVertex,
   scheduleDraftPreview,
@@ -252,6 +253,14 @@ export default function MapView() {
   const customOverlays = useMapStore((s) => s.customOverlays);
   // "Possible routes" hint: only while actually drawing a snapped line.
   const trailOverlay = useMapStore((s) => s.tool === "line" && s.snapEnabled);
+
+  // Fetch this account's custom overlays once. Not persisted locally (see
+  // mapStore.ts), so this is the only thing that populates them after load —
+  // a saved map's stack can already reference an overlay id before this
+  // resolves; the build effect below picks it up once customOverlays changes.
+  useEffect(() => {
+    loadCustomOverlays();
+  }, []);
 
   // Init once.
   useEffect(() => {

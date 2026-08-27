@@ -2,7 +2,8 @@
 
 import { useState } from "react";
 import { OBJECT_COLORS } from "@/lib/objects";
-import { useMapStore } from "@/store/mapStore";
+import { parseCustomOverlayInput } from "@/lib/customOverlaysApi";
+import { addCustomOverlay, removeCustomOverlayDef, useMapStore } from "@/store/mapStore";
 
 export default function CustomOverlaySection() {
   const [open, setOpen] = useState(false);
@@ -13,10 +14,12 @@ export default function CustomOverlaySection() {
   const [labelField, setLabelField] = useState("");
   const [color, setColor] = useState<string>(OBJECT_COLORS[4]);
   const [formError, setFormError] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
 
   const stack = useMapStore((s) => s.stack);
   const customOverlays = useMapStore((s) => s.customOverlays);
-  const { addLayer, addCustomOverlay, removeCustomOverlayDef } = useMapStore();
+  const customOverlaysLoaded = useMapStore((s) => s.customOverlaysLoaded);
+  const { addLayer } = useMapStore();
 
   const notActive = customOverlays.filter((c) => !stack.some((l) => l.defId === c.id));
 
@@ -29,29 +32,32 @@ export default function CustomOverlaySection() {
     setForming(false);
   }
 
-  function submit() {
-    if (!name.trim() || !url.trim() || !typeName.trim()) {
-      setFormError("Name, URL, and type name are all required.");
-      return;
-    }
-    try {
-      const parsed = new URL(url.trim());
-      if (parsed.protocol !== "https:") {
-        setFormError("Use an https:// URL.");
-        return;
-      }
-    } catch {
-      setFormError("That doesn't look like a valid URL.");
-      return;
-    }
-    addCustomOverlay({
-      name: name.trim(),
-      url: url.trim(),
-      typeName: typeName.trim(),
+  async function submit() {
+    const input = parseCustomOverlayInput({
+      name,
+      url,
+      typeName,
       color,
       labelField: labelField.trim() || undefined,
     });
-    reset();
+    if (!input) {
+      setFormError(
+        !name.trim() || !url.trim() || !typeName.trim()
+          ? "Name, URL, and type name are all required."
+          : "That doesn't look like a valid https:// URL.",
+      );
+      return;
+    }
+    setSubmitting(true);
+    try {
+      await addCustomOverlay(input);
+      reset();
+    } catch (err) {
+      console.warn("failed to add custom overlay", err);
+      setFormError("Couldn't save that overlay — try again.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   const input = "w-full rounded border border-gray-300 px-1.5 py-1 text-xs text-gray-800";
@@ -128,13 +134,15 @@ export default function CustomOverlaySection() {
               <div className="flex gap-1.5">
                 <button
                   onClick={submit}
-                  className="flex-1 rounded-md bg-emerald-700 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-800"
+                  disabled={submitting}
+                  className="flex-1 rounded-md bg-emerald-700 px-2 py-1 text-xs font-medium text-white hover:bg-emerald-800 disabled:opacity-60"
                 >
-                  Add
+                  {submitting ? "Adding…" : "Add"}
                 </button>
                 <button
                   onClick={reset}
-                  className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50"
+                  disabled={submitting}
+                  className="rounded-md border border-gray-200 px-2 py-1 text-xs text-gray-600 hover:bg-gray-50 disabled:opacity-60"
                 >
                   Cancel
                 </button>
@@ -148,7 +156,11 @@ export default function CustomOverlaySection() {
             </div>
           )}
 
-          {notActive.length > 0 && (
+          {!customOverlaysLoaded && (
+            <p className="px-1 text-xs text-gray-400">Loading…</p>
+          )}
+
+          {customOverlaysLoaded && notActive.length > 0 && (
             <ul className="space-y-1">
               {notActive.map((c) => (
                 <li key={c.id} className="flex items-center gap-1">
@@ -165,7 +177,10 @@ export default function CustomOverlaySection() {
                   <button
                     onClick={() => {
                       if (confirm(`Delete "${c.name}"? This forgets the saved URL.`))
-                        removeCustomOverlayDef(c.id);
+                        removeCustomOverlayDef(c.id).catch((err) => {
+                          console.warn("failed to delete custom overlay", err);
+                          alert("Couldn't delete that overlay — try again.");
+                        });
                     }}
                     className="px-1 text-gray-400 hover:text-red-600"
                     aria-label={`Delete ${c.name}`}
