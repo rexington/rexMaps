@@ -8,7 +8,7 @@ export async function GET(req: Request) {
   if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
 
   const { results } = await env.DB.prepare(
-    "SELECT id, title, updated_at FROM maps ORDER BY updated_at DESC",
+    "SELECT id, title, updated_at, is_public FROM maps ORDER BY updated_at DESC",
   ).all();
   return Response.json(results);
 }

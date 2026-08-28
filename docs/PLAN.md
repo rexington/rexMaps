@@ -943,6 +943,66 @@ column, `/m/[id]` view, `/api/public-maps/[id]`) is now genuinely simple —
 a route that just skips the `sessionUser()` check on purpose, no
 Bypass-Application/static-asset gymnastics required.
 
+### Public map share links (done 2026-08-28)
+The original ask, finally simple now that auth is in-app. A map's own id
+doubles as its share URL (`/m/[id]`) — CalTopo's own model, per Rex's
+framing when this whole thread started — no separate share token, so
+toggling public off then back on re-exposes the same link rather than
+rotating it; that's an explicit, deliberate tradeoff, not an oversight.
+
+**Data model**: `is_public INTEGER NOT NULL DEFAULT 0` on `maps`
+(`migrations/0006_maps_add_is_public.sql`). Toggling it is a dedicated
+`PATCH /api/maps/[id]` (`{isPublic: boolean}`), deliberately separate from
+the existing `PUT` (which saves title+data together) — sharing/unsharing a
+map shouldn't depend on, or overwrite with, whatever's currently loaded
+locally in the editor.
+
+**The public route** (`/api/public-maps/[id]`) is the one handler in the
+app with no `sessionUser()` call, by design — real authorization still
+happens, just as a query condition (`WHERE id = ?1 AND is_public = 1`)
+rather than a session check. 404 for both "doesn't exist" and "exists but
+private," so the route can't be used to enumerate which ids are real.
+
+**The viewer** (`/m/[id]`, `PublicMapView.tsx`) is a new, separate, much
+smaller component from MapView — not a "read-only mode" bolted onto it.
+MapView's init effect fires session-gated calls (`loadCustomOverlays()`,
+etc.) that would just fail (harmlessly) on every anonymous load, and it
+carries a whole editing/store apparatus a read-only view has no use for.
+PublicMapView instead reuses the same underlying primitives directly —
+`buildStyle()` (compositor), `objectsToFeatureCollection()`,
+`ensureMarkerIcons()` — the exact functions MapView itself calls, so a
+shared map renders identically to the original, just via ~120 lines
+instead of the full app shell. Same `dynamic(..., {ssr:false})` pattern as
+`MapApp.tsx` (had to be a Client Component doing the import, not the
+Server Component page itself — that's a hard Next.js constraint, not a
+style choice — see `PublicMapApp.tsx`).
+
+**Verified beyond curl** for this one, deliberately — the previous
+auth-migration pass could lean on curl/D1 checks alone since nothing it
+touched was new rendering code, but this feature's actual job is drawing a
+real MapLibre/WebGL map, which curl can't observe. Screenshotted via
+headless Chrome against real seeded rows (a public marker map and a
+private one). First attempt showed Chrome's own "page couldn't load"
+renderer-crash interstitial — not an app bug: the server log showed every
+request, including the data fetch, returning 200, and `/` (which never
+mounts MapLibre while signed out) screenshotted fine with identical flags,
+isolating the failure to WebGL context creation in headless Chrome
+specifically. Fixed by adding software-WebGL flags
+(`--use-angle=swiftshader --enable-unsafe-swiftshader`) to the Chrome
+invocation, not the app. Re-verified: title, marker, and the OpenFreeMap
+basemap all render correctly at the right location and zoom; the
+not-found state (nonexistent id) renders its own clean message rather
+than an error or a blank map.
+
+Not independently verified: the "Share" button/copy-link UI in
+`ObjectsPanel.tsx` (`SavedMapRow`) — it's a real signed-in-only surface,
+and simulating Rex's actual Google session wasn't attempted (same
+boundary as the auth-migration pass — see above). Confirmed instead: the
+API layer it depends on (`PATCH`, `GET /api/maps` now including
+`is_public`) is correct and properly session-gated; the button itself
+follows the same optimistic-local-update pattern already proven correct
+in `handleDeleteSaved` right next to it.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These
@@ -970,7 +1030,7 @@ data-sourcing/research risk, or multiple sessions.
 | 15 | S | Layers/Data | ✅ Custom overlays: private per-account, server-backed | Done 2026-08-27 — see notes above. Identity-verification foundation (`src/lib/access.ts`) this row's approach reuses |
 | 16 | M | Saved maps | ✅ Ownership retrofit on `maps` | Done 2026-08-28, bundled into the auth-migration pass (see decision log) — `owner` column added, backfilled to Rex. Deliberately *not* scoped to owner-only writes: `maps` stays a shared, any-signed-in-user-may-edit pool, same as before; `owner` just records who created each row |
 | 17 | M | Layers/Data | Layer-vs-overlay toggle for custom sources | Let a custom WFS source be treated as a base layer (bottom-insertion, vector-exclusivity rules) instead of always an overlay — `addLayer()`'s vector/raster insertion logic in mapStore.ts would need a third case |
-| 18 | M | Collaboration | No-auth map sharing (share link, read-only) | The original ask that triggered the auth migration (2026-08-28) — a single map viewable via a direct link, no sign-in. Was going to need a Cloudflare Access path-Bypass Application + careful static-asset enumeration; now that auth is in-app, it's just a route that skips the `sessionUser()` check on purpose. Not yet built — comes after Access is fully retired (see decision log) |
+| 18 | M | Collaboration | ✅ No-auth map sharing (share link, read-only) | Done 2026-08-28 — see write-up below. The original ask that triggered the auth migration; ended up genuinely simple once auth was in-app |
 | 19 | L | Platform | Mobile-native app (iOS, then Android) | Rex-stated future direction, no design work done yet. `maps`/`custom_overlays` already being real API-backed (not just localStorage) is what makes this feasible at all — a native client would talk to the same `/api/*` routes |
 
 ## Decision log

@@ -25,6 +25,7 @@ import {
   deleteMap,
   getMap,
   listMaps,
+  setMapPublic,
   updateMap,
   type SavedMapSummary,
 } from "@/lib/savedMaps";
@@ -303,6 +304,83 @@ function ObjectRow({ obj }: { obj: MapObject }) {
   );
 }
 
+function SavedMapRow({
+  map,
+  onLoad,
+  onDelete,
+  onTogglePublic,
+}: {
+  map: SavedMapSummary;
+  onLoad: (id: string) => void;
+  onDelete: (id: string) => void;
+  onTogglePublic: (id: string, makePublic: boolean) => void;
+}) {
+  const [copied, setCopied] = useState(false);
+  const isPublic = !!map.is_public;
+  // Built from the current origin, not a hardcoded domain — works whether
+  // this is opened via the custom domain or the workers.dev fallback.
+  const shareUrl =
+    typeof window !== "undefined" ? `${window.location.origin}/m/${map.id}` : "";
+
+  async function handleCopy() {
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      prompt("Copy this link:", shareUrl);
+    }
+  }
+
+  return (
+    <li className="rounded-md border border-gray-200 bg-white px-2 py-1.5">
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => onLoad(map.id)}
+          className="flex-1 truncate text-left text-sm text-gray-900 hover:text-emerald-800"
+          title={new Date(map.updated_at * 1000).toLocaleString()}
+        >
+          {map.title}
+        </button>
+        <span className="text-xs text-gray-400">
+          {new Date(map.updated_at * 1000).toLocaleDateString()}
+        </span>
+        <button
+          onClick={() => onTogglePublic(map.id, !isPublic)}
+          className={`px-1 ${isPublic ? "text-emerald-700 hover:text-emerald-900" : "text-gray-400 hover:text-gray-700"}`}
+          title={isPublic ? "Public — anyone with the link can view. Click to make private." : "Make this map public (viewable via a share link, no sign-in)"}
+          aria-label={isPublic ? `Stop sharing ${map.title}` : `Share ${map.title}`}
+        >
+          {isPublic ? "🔗" : "🔒"}
+        </button>
+        <button
+          onClick={() => onDelete(map.id)}
+          className="px-1 text-gray-400 hover:text-red-600"
+          aria-label={`Delete ${map.title}`}
+        >
+          ✕
+        </button>
+      </div>
+      {isPublic && (
+        <div className="mt-1.5 flex items-center gap-1.5 border-t border-gray-100 pt-1.5">
+          <input
+            readOnly
+            value={shareUrl}
+            onFocus={(e) => e.currentTarget.select()}
+            className="min-w-0 flex-1 truncate rounded border border-gray-200 bg-gray-50 px-1.5 py-0.5 text-xs text-gray-600"
+          />
+          <button
+            onClick={handleCopy}
+            className="shrink-0 rounded bg-emerald-700 px-2 py-0.5 text-xs font-medium text-white hover:bg-emerald-800"
+          >
+            {copied ? "Copied!" : "Copy"}
+          </button>
+        </div>
+      )}
+    </li>
+  );
+}
+
 export default function ObjectsPanel() {
   const objects = useMapStore((s) => s.objects);
   const currentMap = useMapStore((s) => s.currentMap);
@@ -383,6 +461,17 @@ export default function ObjectsPanel() {
       if (useMapStore.getState().currentMap.id === id) markSaved("");
     } catch (err) {
       alert(`Delete failed: ${err instanceof Error ? err.message : err}`);
+    }
+  }
+
+  async function handleTogglePublic(id: string, makePublic: boolean) {
+    try {
+      await setMapPublic(id, makePublic);
+      setSavedList(
+        (l) => l?.map((m) => (m.id === id ? { ...m, is_public: makePublic ? 1 : 0 } : m)) ?? null,
+      );
+    } catch (err) {
+      alert(`Couldn't update sharing: ${err instanceof Error ? err.message : err}`);
     }
   }
 
@@ -487,28 +576,13 @@ export default function ObjectsPanel() {
               )}
               <ul className="space-y-1">
                 {savedList.map((m) => (
-                  <li
+                  <SavedMapRow
                     key={m.id}
-                    className="flex items-center gap-2 rounded-md border border-gray-200 bg-white px-2 py-1.5"
-                  >
-                    <button
-                      onClick={() => handleLoad(m.id)}
-                      className="flex-1 truncate text-left text-sm text-gray-900 hover:text-emerald-800"
-                      title={new Date(m.updated_at * 1000).toLocaleString()}
-                    >
-                      {m.title}
-                    </button>
-                    <span className="text-xs text-gray-400">
-                      {new Date(m.updated_at * 1000).toLocaleDateString()}
-                    </span>
-                    <button
-                      onClick={() => handleDeleteSaved(m.id)}
-                      className="px-1 text-gray-400 hover:text-red-600"
-                      aria-label={`Delete ${m.title}`}
-                    >
-                      ✕
-                    </button>
-                  </li>
+                    map={m}
+                    onLoad={handleLoad}
+                    onDelete={handleDeleteSaved}
+                    onTogglePublic={handleTogglePublic}
+                  />
                 ))}
               </ul>
             </div>

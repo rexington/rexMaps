@@ -13,6 +13,7 @@ export interface SavedMapSummary {
   id: string;
   title: string;
   updated_at: number;
+  is_public: number;
 }
 
 /** Server-side validation (light — a trusted family pool behind in-app session auth). */
@@ -63,3 +64,12 @@ export const updateMap = (id: string, title: string, data: SavedMapData) =>
 
 export const deleteMap = (id: string) =>
   api<{ ok: true }>(`/api/maps/${id}`, { method: "DELETE" });
+
+/** Toggles a map's public visibility only — deliberately separate from
+ * updateMap so sharing/unsharing never touches (or depends on) whatever
+ * content is currently loaded locally. See docs/PLAN.md. */
+export const setMapPublic = (id: string, isPublic: boolean) =>
+  api<{ ok: true }>(`/api/maps/${id}`, {
+    method: "PATCH",
+    body: JSON.stringify({ isPublic }),
+  });
