@@ -24,7 +24,7 @@ export interface Viewport {
   zoom: number;
 }
 
-export type Tool = "select" | "marker" | "line" | "polygon";
+export type Tool = "select" | "marker" | "line" | "polygon" | "query";
 
 export interface OfflinePackMeta {
   id: string;
@@ -125,6 +125,11 @@ interface MapStore {
 
   // Objects
   setSelected: (id: string | null) => void;
+  /** True while waiting for a click on one of the selected line's vertices
+   * to split it there (see splitObjectAtVertex). Always false unless a line
+   * is selected — cleared automatically on tool change or reselection. */
+  splitting: boolean;
+  setSplitting: (splitting: boolean) => void;
   updateObject: (
     id: string,
     patch: Partial<
@@ -184,6 +189,7 @@ export const useMapStore = create<MapStore>()(
       stack: DEFAULT_STACK,
       objects: [],
       selectedId: null,
+      splitting: false,
       tool: "select",
       draft: null,
       snapEnabled: true,
@@ -274,7 +280,7 @@ export const useMapStore = create<MapStore>()(
 
       setTool: (tool) => {
         draftRev++;
-        set({ tool, draft: null });
+        set({ tool, draft: null, splitting: false });
       },
 
       toggleSnap: () => set((s) => ({ snapEnabled: !s.snapEnabled })),
@@ -352,7 +358,8 @@ export const useMapStore = create<MapStore>()(
         set({ draft: null, tool: "select" });
       },
 
-      setSelected: (selectedId) => set({ selectedId }),
+      setSelected: (selectedId) => set({ selectedId, splitting: false }),
+      setSplitting: (splitting) => set({ splitting }),
 
       updateObject: (id, patch) =>
         set((s) => ({
@@ -364,6 +371,7 @@ export const useMapStore = create<MapStore>()(
         set((s) => ({
           objects: s.objects.filter((o) => o.id !== id),
           selectedId: s.selectedId === id ? null : s.selectedId,
+          splitting: s.selectedId === id ? false : s.splitting,
           dirty: true,
         })),
 
@@ -622,6 +630,54 @@ export async function refitObjectVertex(id: string, idx: number) {
       console.warn("re-route after vertex edit failed; leg stays straight", err);
     }
   }
+}
+
+/**
+ * Splits a line into two line objects at one of its waypoints — e.g. an
+ * out-and-back import can be trimmed to just the outbound half by splitting
+ * at the turnaround, then deleting the unwanted half with the normal object
+ * delete. A no-op at either endpoint (nothing to split there). Both new
+ * objects always carry explicit topology (waypoints/legs/snapped), even if
+ * the original didn't (a plain import) — lineTopology() derives the same
+ * shape on the fly today, so this changes nothing about how either half
+ * renders or re-routes, just makes it permanent.
+ */
+export function splitObjectAtVertex(id: string, idx: number) {
+  const obj = useMapStore.getState().objects.find((o) => o.id === id);
+  if (!obj || obj.kind !== "line") return;
+  const topo = lineTopology(obj);
+  if (idx <= 0 || idx >= topo.waypoints.length - 1) return;
+
+  const firstLegs = topo.legs.slice(0, idx);
+  const secondLegs = topo.legs.slice(idx);
+  // Keep the original title on the first half, not both — split-then-
+  // delete-the-other-half is the expected workflow (e.g. trimming an
+  // out-and-back to one direction), and a lone "Trail (1)" left behind
+  // reads as if a sibling still exists.
+  const first: MapObject = {
+    ...obj,
+    id: crypto.randomUUID(),
+    waypoints: topo.waypoints.slice(0, idx + 1),
+    legs: firstLegs,
+    snapped: topo.snapped.slice(0, idx),
+    coords: legsToCoords(firstLegs),
+  };
+  const second: MapObject = {
+    ...obj,
+    id: crypto.randomUUID(),
+    title: `${obj.title} (2)`,
+    waypoints: topo.waypoints.slice(idx),
+    legs: secondLegs,
+    snapped: topo.snapped.slice(idx),
+    coords: legsToCoords(secondLegs),
+  };
+
+  useMapStore.setState((s) => ({
+    objects: s.objects.flatMap((o) => (o.id === id ? [first, second] : [o])),
+    selectedId: first.id,
+    splitting: false,
+    dirty: true,
+  }));
 }
 
 /** Fetches this account's custom overlays from the server. Called once from

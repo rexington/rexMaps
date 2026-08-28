@@ -745,6 +745,111 @@ both still render when the label field is left out of the typed list
 rendered). No edit UI exists for any overlay field (same scope line as the
 account-scoping pass above) — changing the list means delete and re-add.
 
+### Split line at a vertex (done 2026-08-27)
+Rex's use case: an imported out-and-back GPX track, wanting just the
+outbound half. Scoped to splitting at an existing vertex (not an arbitrary
+point along a leg) — the drag-handle system already renders one at every
+waypoint, including every raw coordinate of a topology-less import, so no
+new hit-testing or leg-interpolation was needed; a turnaround point in a
+real out-and-back is a real recorded trackpoint anyway, not a point you'd
+need to invent mid-leg.
+
+New `splitting: boolean` store flag (cleared automatically on tool change,
+reselection, or deleting the line being split — never allowed to go stale
+against `selectedId`). A new "Split" button in the selected-line editor
+(`ObjectsPanel.tsx`, gated on having an interior vertex — `obj.waypoints
+?.length ?? obj.coords.length > 2`, computed without running the O(n)-
+allocating `lineTopology()` derive path on every row render) arms it;
+`MapView`'s existing `mousedown`-on-handle path (not `click` — handles are
+already a drag gesture, so that's where the event actually fires) branches
+to `splitObjectAtVertex(id, idx)` instead of starting a drag when armed.
+Cursor turns crosshair over a handle while armed; `DrawHint` shows a cancel
+chip; Escape backs out without deselecting.
+
+`splitObjectAtVertex()` (mapStore.ts) slices `lineTopology()`'s
+waypoints/legs/snapped at the clicked index into two new line objects,
+replacing the original — a no-op at either endpoint. Both halves always
+carry explicit topology, even for a plain import that had none, since
+`lineTopology()` already derives the identical shape on the fly; this just
+makes it permanent. The first half **keeps the original title**; only the
+second gets a `(2)` suffix — split-then-delete-the-unwanted-half is the
+expected flow, and a lone survivor titled "Trail (1)" would misleadingly
+imply a sibling that's already gone.
+
+Verified against a synthetic 2999-point out-and-back (the real shape of a
+dense GPX import, not a hand-drawn 4-point line): a real CDP mouse event at
+the projected pixel of the turnaround vertex produced two objects whose
+combined coordinate count was exactly original+1 (the split vertex appears
+in both halves, nothing dropped or duplicated). Screenshotted at zoom 16 to
+check the actual concern with thousands of same-radius handle circles —
+they render as a clean, individually-clickable "chain of pearls" once
+zoomed in past whatever the ambient point density needs, same zoom-dependent
+usability the existing vertex-drag feature already has. The turnaround
+itself is the one point on an out-and-back that's never ambiguous to click,
+since it's the only vertex without a nearby twin from the return leg.
+
+### Tracestrack Topo layer + OSM "query features" (done 2026-08-27)
+Two independent asks in one message, kept as two features rather than one:
+
+**Tracestrack Topo** (`tracestrack-topo` in registry.ts): an OSM-derived
+raster topo base layer with terrain shading — visually stronger than USGS
+Topo. Needs a per-account key (Rex signed up and supplied his own;
+`NEXT_PUBLIC_TRACESTRACK_KEY`) — the site itself blocks automated fetches,
+so pricing/terms weren't independently confirmed beyond Tracestrack's own
+"free for non-commercial use" framing. Wired through the same
+`"google-session"`/`"sentinel-cdse"` sentinel-token pattern in
+`RasterLayerDef.tiles` (now also `"tracestrack"`), resolved in
+`compositor.ts`'s `rasterEntry()`. Verified live: 512px native tiles (no
+`@1x` suffix needed — confirmed by fetching one and checking pixel
+dimensions directly rather than trusting an issue-title inference), max z19,
+attribution merges correctly alongside other active layers. Excluded from
+offline packs (`offlineEligibleLayers()`/`layerAssets()`) — conservatively,
+since unlike Google's explicit no-cache clause, Tracestrack's
+caching/redistribution terms aren't confirmed either way; worth revisiting
+if Rex checks. **The key lives only in `.env.local` (gitignored) on this
+machine** — same tradeoff as the Google key already had, just newly worth
+naming: a deploy built from anywhere else loses it silently (the layer just
+disappears via `missingKeyReason`'s existing "no key" skip), not an error.
+
+**OSM "query features"** (`src/lib/osmQuery.ts`, new `"query"` tool):
+click the map, see what OpenStreetMap knows about that spot — same idea as
+osm.org's own right-click menu item. Backed by the free public Overpass API
+(no key, CORS `*` verified live, ~10k req/day public etiquette — one
+request per click is nowhere close). Rex's stated primary use case,
+clarified after the first pass: seeing what forest/wilderness/protected
+area *encloses* a spot, not just what's nearby — a real design fork from
+"OSM's Query features" as originally scoped. A small-radius `around` search
+only matches geometry passing near the point; it can't find a polygon whose
+*interior* contains the point without touching its boundary (verified: an
+`around` query deep inside Rocky Mountain National Park returns nothing).
+Fixed by adding Overpass's `is_in(lat,lon);area._;` to the same query,
+returning enclosing areas — parks, wilderness, admin boundaries — verified
+against a real point inside RMNP, correctly returning both the park and the
+wilderness area within it. One query, two result sets: "Encloses this spot"
+(is_in, sorted protected/reserve areas first, then administrative
+county→state→country, then everything else) and "Nearby" (the original
+small-radius search, closest first).
+
+Tags are curated (`curatedTags()`, an allowlist), not dumped raw — an admin
+boundary like "United States" carries 300+ tags (one per language's
+translated name) that would otherwise flood the popup. A real bug this
+surfaced: an element whose only raw tag was an uncurated one (e.g. an
+unnamed building tagged just `building=retail`) showed a heading derived
+from that tag's value with an empty "No attributes" table underneath —
+confusingly self-contradictory. Fixed by dropping any element with zero
+curated tags entirely, and by deriving the heading's fallback label from
+the curated tags too, not the raw ones, so the heading can never reference
+something the table doesn't show.
+
+**A real bug caught only by testing against the actual deployed code path,
+not the curl commands used to design the query**: Overpass QL requires a
+trailing `;` on the last statement inside a union block before its closing
+`)` — verified working via curl with that semicolon present, then dropped
+by mistake while transcribing the verified string into the TypeScript
+template literal, which 400'd. Caught immediately by running the real
+click-through-the-UI flow via CDP rather than trusting the curl
+verification alone.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These

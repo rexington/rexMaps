@@ -16,6 +16,7 @@ lives in `src/lib/layers/registry.ts` — keep the two in sync.
 | USGS Imagery | raster XYZ | `https://basemap.nationalmap.gov/arcgis/rest/services/USGSImageryOnly/MapServer/tile/{z}/{y}/{x}` | Free, public domain. |
 | USFS Forest Service Basemap | Esri vector tiles | style: `https://tiles.arcgis.com/tiles/gGHDlz6USftL5Pau/arcgis/rest/services/FSBasemap_20240617/VectorTileServer/resources/styles/root.json` | Free, public USFS service. Needs Esri-style → MapLibre normalization (see `src/lib/layers/esri.ts`). This is the modern FSTopo replacement (legacy `EDW_FSTopo_01` MapServer is dead). |
 | Shaded Relief (Esri World Hillshade) | raster XYZ | `https://services.arcgisonline.com/arcgis/rest/services/Elevation/World_Hillshade/MapServer/tile/{z}/{y}/{x}` | Free with Esri attribution. Use as multiply-ish overlay at partial opacity. |
+| Tracestrack Topo | raster XYZ | `https://tile.tracestrack.com/topo__/{z}/{x}/{y}.png?key={key}` | **Needs a per-account API key** (`NEXT_PUBLIC_TRACESTRACK_KEY`). Free for non-commercial use per Tracestrack's own terms; metered above that — exact pricing tiers not independently confirmed (tracestrack.com blocks automated fetches; Rex supplied his own key directly). 512px native tiles (no `@1x` suffix needed), max z19, attribution "© Tracestrack, OSM, NASA". Excluded from offline packs — caching/redistribution terms not confirmed, unlike Google's explicit no-cache clause. |
 
 ## Active (Stage 4)
 
@@ -29,6 +30,7 @@ lives in `src/lib/layers/registry.ts` — keep the two in sync.
 | Service | Endpoint | Cost / terms |
 |---------|----------|--------------|
 | Nominatim search | `https://nominatim.openstreetmap.org/search?format=jsonv2&limit=6&q=…` | Free public API. Etiquette: ≤1 req/s, no autocomplete — the app searches only on Enter. OSM attribution shown in the results dropdown. |
+| Overpass "query features" | `https://overpass-api.de/api/interpreter?data=[out:json][timeout:10];(node(around:25,{lat},{lng});way(…);relation(…));out tags center 200;` | Free public API, no key, CORS `*` (verified live). Public etiquette ~10k req/day — one request per click, nowhere close. Client-side filters to tagged elements only (most nodes near any point are untagged way/relation geometry) and sorts by distance, since Overpass's own result order isn't spatial. `src/lib/osmQuery.ts`. |
 | Sentinel scene dates (WFS) | `https://sh.dataspace.copernicus.eu/ogc/wfs/{INSTANCE_ID}?…&TYPENAMES=DSS2&BBOX={s},{w},{n},{e}&TIME={from}/{to}&OUTPUTFORMAT=application/json` | Same instance ID + quota as the WMTS. `DSS2` = Sentinel-2 L2A footprints; features carry `date`, `time`, `cloudCoverPercentage`. WFS 2.0 EPSG:4326 BBOX is **lat-first**. Drives the "Showing: Aug 24 (today) · ~25% clouds" freshness line in the layer panel; cached per ~11 km bbox + window, fetched only while the layer row is present. |
 
 ## Active data services (not map layers)

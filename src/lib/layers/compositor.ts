@@ -7,6 +7,7 @@ import { EMPTY_FC, objectStyleParts } from "./objectLayers";
 import { applyGroupOpacity } from "./opacity";
 import { layerDef } from "./registry";
 import { sentinelSource } from "./sentinel";
+import { tracestrackKey } from "./tracestrack";
 import { trailOverlayStyleParts } from "./trailOverlay";
 import type { ActiveLayer, RasterLayerDef } from "./types";
 
@@ -35,6 +36,11 @@ async function rasterEntry(
     if (!src) return null; // no instance ID configured — skip silently
     tiles = src.tiles;
     tileSize = src.tileSize;
+  } else if (def.tiles === "tracestrack") {
+    const key = tracestrackKey();
+    if (!key) return null; // no API key configured — skip silently
+    tiles = [`https://tile.tracestrack.com/topo__/{z}/{x}/{y}.png?key=${key}`];
+    tileSize = 512; // native tile size for the plain (non-@1x) endpoint
   } else {
     tiles = def.tiles;
   }

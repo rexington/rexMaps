@@ -50,6 +50,17 @@ const TOOLS: { tool: Tool; label: string; icon: React.ReactNode; key: string }[]
       </svg>
     ),
   },
+  {
+    tool: "query",
+    label: "Query features (what's here?)",
+    key: "query",
+    icon: (
+      <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
+        <circle cx="10.5" cy="10.5" r="6.5" />
+        <path d="M15.5 15.5 L21 21" strokeLinecap="round" />
+      </svg>
+    ),
+  },
 ];
 
 export default function Toolbar() {
@@ -138,11 +149,29 @@ export function DrawHint() {
   const toggleSnap = useMapStore((s) => s.toggleSnap);
   const draftUndo = useMapStore((s) => s.draftUndo);
   const draftFinish = useMapStore((s) => s.draftFinish);
-  if (tool === "select") return null;
+  const splitting = useMapStore((s) => s.splitting);
+  const setSplitting = useMapStore((s) => s.setSplitting);
+  if (tool === "select" && !splitting) return null;
+
+  if (splitting) {
+    return (
+      <div className="absolute bottom-6 left-2 right-16 z-10 flex flex-wrap items-center justify-center gap-x-2 gap-y-1 rounded-2xl bg-gray-900/90 px-3 py-2 text-xs text-white shadow sm:bottom-auto sm:left-1/2 sm:right-auto sm:top-14 sm:w-auto sm:max-w-none sm:-translate-x-1/2 sm:flex-nowrap sm:rounded-full sm:bg-gray-900/80 sm:px-4 sm:py-1.5">
+        <span>Click a vertex on the line to split it there · Esc cancels</span>
+        <button
+          onClick={() => setSplitting(false)}
+          className="rounded-full bg-gray-600 px-2 py-0.5 font-medium text-gray-100 hover:bg-gray-500"
+        >
+          Cancel
+        </button>
+      </div>
+    );
+  }
 
   let text: string;
   if (tool === "marker") {
     text = "Click the map to place markers · Esc to finish";
+  } else if (tool === "query") {
+    text = "Click the map to see what OpenStreetMap knows about that spot · Esc to finish";
   } else {
     // Committed legs + the cursor segment (routed preview when available).
     const committed = draft ? legsToCoords(draft.legs) : [];

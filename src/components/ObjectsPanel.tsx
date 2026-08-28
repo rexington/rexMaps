@@ -149,8 +149,14 @@ function SimplifyControl({ obj, updateObject }: { obj: MapObject; updateObject: 
 
 function ObjectRow({ obj }: { obj: MapObject }) {
   const selected = useMapStore((s) => s.selectedId === obj.id);
-  const { setSelected, updateObject, removeObject } = useMapStore();
+  const splitting = useMapStore((s) => s.selectedId === obj.id && s.splitting);
+  const { setSelected, setSplitting, updateObject, removeObject } = useMapStore();
   const len = objectLength(obj);
+  // Avoid lineTopology()'s derive branch here — it allocates a full O(n) legs
+  // array, and this runs on every render of every selected line row. The
+  // waypoint count alone (or coords length, for topology-less imports) is
+  // all this check needs.
+  const canSplit = obj.kind === "line" && (obj.waypoints?.length ?? obj.coords.length) > 2;
 
   return (
     <li
@@ -269,9 +275,24 @@ function ObjectRow({ obj }: { obj: MapObject }) {
                 aria-label={`Color ${c}`}
               />
             ))}
+            {canSplit && (
+              <button
+                onClick={() => setSplitting(!splitting)}
+                title="Click a vertex on the map to split the line there"
+                className={`ml-auto rounded px-2 py-0.5 text-xs ${
+                  splitting
+                    ? "bg-emerald-700 text-white"
+                    : "text-gray-600 hover:bg-gray-100"
+                }`}
+              >
+                {splitting ? "Click map to split…" : "Split"}
+              </button>
+            )}
             <button
               onClick={() => removeObject(obj.id)}
-              className="ml-auto rounded px-2 py-0.5 text-xs text-red-600 hover:bg-red-50"
+              className={`rounded px-2 py-0.5 text-xs text-red-600 hover:bg-red-50 ${
+                canSplit ? "" : "ml-auto"
+              }`}
             >
               Delete
             </button>

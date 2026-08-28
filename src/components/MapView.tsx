@@ -31,12 +31,14 @@ import {
 import { mapRef } from "@/lib/mapRef";
 import { ensureMarkerIcons } from "@/lib/markerIcons";
 import { objectsToFeatureCollection } from "@/lib/objects";
+import { curatedTags, queryOsmFeatures, type OsmElement, type OsmQueryResult } from "@/lib/osmQuery";
 import {
   appendDraftPoint,
   loadCustomOverlays,
   moveObjectVertex,
   refitObjectVertex,
   scheduleDraftPreview,
+  splitObjectAtVertex,
   useMapStore,
 } from "@/store/mapStore";
 import LayerPanel from "./LayerPanel";
@@ -152,6 +154,106 @@ function showCustomOverlayPopup(map: MaplibreMap, e: MapMouseEvent) {
     .setLngLat(e.lngLat)
     .setDOMContent(buildPopupContent(hit.properties ?? {}))
     .addTo(map);
+}
+
+/** One heading + curated tag table per matched element, reusing
+ * buildPopupContent's textContent-only rendering (this is third-party OSM
+ * data, same trust posture as a custom overlay's properties). Tags are
+ * pre-filtered (see curatedTags) — an admin boundary can carry hundreds of
+ * per-language name tags that would otherwise flood the popup. */
+function appendElementRows(container: HTMLElement, elements: OsmElement[], cap: number) {
+  const shown = elements.slice(0, cap);
+  for (const el of shown) {
+    const tags = curatedTags(el.tags);
+    const heading = document.createElement("div");
+    heading.style.fontWeight = "600";
+    heading.style.marginTop = "8px";
+    // Fall back to the first *curated* value, not the first raw tag — every
+    // element here has at least one curated tag (see hasCuratedTags), so
+    // the heading never references something the table below doesn't show.
+    heading.textContent = `${tags.name ?? Object.values(tags)[0]} · ${el.type}`;
+    container.appendChild(heading);
+    container.appendChild(buildPopupContent(tags));
+  }
+  if (elements.length > shown.length) {
+    const more = document.createElement("p");
+    more.style.color = "#6b7280";
+    more.style.marginTop = "8px";
+    more.textContent = `+${elements.length - shown.length} more`;
+    container.appendChild(more);
+  }
+}
+
+function buildOsmQueryContent({ areas, nearby }: OsmQueryResult): HTMLElement {
+  const container = document.createElement("div");
+  container.style.fontSize = "12px";
+  container.style.maxHeight = "320px";
+  container.style.overflowY = "auto";
+  if (areas.length === 0 && nearby.length === 0) {
+    container.textContent = "Nothing tagged found here";
+    container.style.color = "#6b7280";
+    return container;
+  }
+  if (areas.length > 0) {
+    const label = document.createElement("div");
+    label.style.fontSize = "10px";
+    label.style.fontWeight = "700";
+    label.style.textTransform = "uppercase";
+    label.style.letterSpacing = "0.03em";
+    label.style.color = "#059669";
+    label.textContent = "Encloses this spot";
+    container.appendChild(label);
+    appendElementRows(container, areas, 10);
+  }
+  if (nearby.length > 0) {
+    const label = document.createElement("div");
+    label.style.fontSize = "10px";
+    label.style.fontWeight = "700";
+    label.style.textTransform = "uppercase";
+    label.style.letterSpacing = "0.03em";
+    label.style.color = "#059669";
+    label.style.marginTop = areas.length > 0 ? "10px" : "0";
+    label.textContent = "Nearby";
+    container.appendChild(label);
+    appendElementRows(container, nearby, 15);
+  }
+  return container;
+}
+
+/** Loading indicator shown immediately, before the Overpass fetch resolves —
+ * a click-triggered network call has no other "this is working" signal. */
+function loadingPopupContent(): HTMLElement {
+  const el = document.createElement("div");
+  el.style.fontSize = "12px";
+  el.style.color = "#6b7280";
+  el.textContent = "Querying OpenStreetMap…";
+  return el;
+}
+
+/** Sequence guard so a slow/stale response can never update a popup the
+ * user has since replaced by clicking elsewhere. */
+let osmQuerySeq = 0;
+
+function showOsmQueryPopup(map: MaplibreMap, e: MapMouseEvent) {
+  const mySeq = ++osmQuerySeq;
+  const popup = new Popup({ closeButton: true, maxWidth: "280px" })
+    .setLngLat(e.lngLat)
+    .setDOMContent(loadingPopupContent())
+    .addTo(map);
+  queryOsmFeatures([e.lngLat.lng, e.lngLat.lat])
+    .then((result) => {
+      if (mySeq !== osmQuerySeq || !popup.isOpen()) return;
+      popup.setDOMContent(buildOsmQueryContent(result));
+    })
+    .catch((err) => {
+      console.warn("OSM feature query failed", err);
+      if (mySeq !== osmQuerySeq || !popup.isOpen()) return;
+      const el = document.createElement("div");
+      el.style.fontSize = "12px";
+      el.style.color = "#b91c1c";
+      el.textContent = "Couldn't reach OpenStreetMap — try again.";
+      popup.setDOMContent(el);
+    });
 }
 
 /** Custom-overlay defs whose source is actually present in the applied
@@ -306,6 +408,9 @@ export default function MapView() {
         case "polygon":
           appendDraftPoint(lngLat(e));
           break;
+        case "query":
+          showOsmQueryPopup(map, e);
+          break;
         case "select":
           // Ignore the click that ends a vertex drag; keep selection when
           // clicking a drag handle.
@@ -329,6 +434,11 @@ export default function MapView() {
       const handle = handleAt(map, e.point);
       if (!handle) return;
       e.preventDefault(); // suppress map drag-pan
+      if (s.splitting) {
+        splitObjectAtVertex(handle.id, handle.idx);
+        justDragged = true; // suppress the click that follows, same as a drag
+        return;
+      }
       map.getCanvas().style.cursor = "grabbing";
       const onMove = (ev: MapMouseEvent) =>
         moveObjectVertex(handle.id, handle.idx, lngLat(ev));
@@ -356,8 +466,11 @@ export default function MapView() {
         s.draftCursor(lngLat(e));
         scheduleDraftPreview();
       } else if (s.tool === "select") {
-        map.getCanvas().style.cursor = handleAt(map, e.point)
-          ? "grab"
+        const onHandle = handleAt(map, e.point);
+        map.getCanvas().style.cursor = onHandle
+          ? s.splitting
+            ? "crosshair"
+            : "grab"
           : hitTest(map, e.point) || customOverlayFeatureAt(map, e.point)
             ? "pointer"
             : "";
@@ -395,6 +508,7 @@ export default function MapView() {
         s.draftFinish();
       } else if (e.key === "Escape") {
         if (s.draft) s.draftCancel();
+        else if (s.splitting) s.setSplitting(false);
         else if (s.tool !== "select") s.setTool("select");
         else s.setSelected(null);
       } else if (

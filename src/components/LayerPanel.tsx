@@ -22,6 +22,7 @@ import {
   sentinelScenes,
   type SentinelScene,
 } from "@/lib/layers/sentinel";
+import { tracestrackKey } from "@/lib/layers/tracestrack";
 import type { ActiveLayer, LayerDef } from "@/lib/layers/types";
 import { mapRef } from "@/lib/mapRef";
 import { removeCustomOverlayDef, useMapStore } from "@/store/mapStore";
@@ -35,6 +36,8 @@ function missingKeyReason(def: LayerDef): string | null {
     return "Set NEXT_PUBLIC_GOOGLE_MAPS_API_KEY to enable";
   if (def.tiles === "sentinel-cdse" && !sentinelInstanceId())
     return "Set NEXT_PUBLIC_SENTINEL_INSTANCE_ID to enable";
+  if (def.tiles === "tracestrack" && !tracestrackKey())
+    return "Set NEXT_PUBLIC_TRACESTRACK_KEY to enable";
   return null;
 }
 

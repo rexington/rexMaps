@@ -17,8 +17,9 @@ interface LayerDefBase {
 export interface RasterLayerDef extends LayerDefBase {
   kind: "raster";
   /** XYZ template URLs, or a token resolved at runtime by the compositor:
-   * "google-session" (Map Tiles API) / "sentinel-cdse" (Copernicus WMTS). */
-  tiles: string[] | "google-session" | "sentinel-cdse";
+   * "google-session" (Map Tiles API) / "sentinel-cdse" (Copernicus WMTS) /
+   * "tracestrack" (Tracestrack Topo). */
+  tiles: string[] | "google-session" | "sentinel-cdse" | "tracestrack";
   googleMapType?: "satellite" | "roadmap";
   tileSize?: number;
 }

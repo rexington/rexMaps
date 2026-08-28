@@ -49,6 +49,16 @@ export const LAYER_DEFS: LayerDef[] = [
     maxzoom: 19,
   },
   {
+    id: "tracestrack-topo",
+    kind: "raster",
+    name: "Tracestrack Topo",
+    description: "OSM-derived topo with terrain shading (needs API key)",
+    category: "base",
+    tiles: "tracestrack",
+    attribution: "© Tracestrack, OSM, NASA",
+    maxzoom: 19,
+  },
+  {
     id: "usgs-topo",
     kind: "raster",
     name: "USGS Topo",
