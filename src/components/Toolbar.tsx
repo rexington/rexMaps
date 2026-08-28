@@ -52,12 +52,15 @@ const TOOLS: { tool: Tool; label: string; icon: React.ReactNode; key: string }[]
   },
   {
     tool: "query",
-    label: "Query features (what's here?)",
+    label: "Query features (what's here?) — or right-click/long-press anytime in Select",
     key: "query",
+    // Info-circle glyph — deliberately not another magnifying glass, which
+    // is already SearchBox's icon (Rex flagged the collision).
     icon: (
       <svg viewBox="0 0 24 24" className="h-4 w-4" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="10.5" cy="10.5" r="6.5" />
-        <path d="M15.5 15.5 L21 21" strokeLinecap="round" />
+        <circle cx="12" cy="12" r="9" />
+        <path d="M12 11v5" strokeLinecap="round" />
+        <circle cx="12" cy="7.5" r="1" fill="currentColor" stroke="none" />
       </svg>
     ),
   },
@@ -171,7 +174,8 @@ export function DrawHint() {
   if (tool === "marker") {
     text = "Click the map to place markers · Esc to finish";
   } else if (tool === "query") {
-    text = "Click the map to see what OpenStreetMap knows about that spot · Esc to finish";
+    text =
+      "Click the map to see what OpenStreetMap knows about that spot · Esc to finish · tip: right-click (or long-press) does this from Select too";
   } else {
     // Committed legs + the cursor segment (routed preview when available).
     const committed = draft ? legsToCoords(draft.legs) : [];

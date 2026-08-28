@@ -234,7 +234,7 @@ function loadingPopupContent(): HTMLElement {
  * user has since replaced by clicking elsewhere. */
 let osmQuerySeq = 0;
 
-function showOsmQueryPopup(map: MaplibreMap, e: MapMouseEvent) {
+function showOsmQueryPopup(map: MaplibreMap, e: Pick<MapMouseEvent, "lngLat">) {
   const mySeq = ++osmQuerySeq;
   const popup = new Popup({ closeButton: true, maxWidth: "280px" })
     .setLngLat(e.lngLat)
@@ -353,6 +353,8 @@ export default function MapView() {
   const stack = useMapStore((s) => s.stack);
   const sentinel = useMapStore((s) => s.sentinel);
   const customOverlays = useMapStore((s) => s.customOverlays);
+  const selectedObj = useMapStore((s) => s.objects.find((o) => o.id === s.selectedId));
+  const setSelected = useMapStore((s) => s.setSelected);
   // "Possible routes" hint: only while actually drawing a snapped line.
   const trailOverlay = useMapStore((s) => s.tool === "line" && s.snapEnabled);
 
@@ -413,9 +415,12 @@ export default function MapView() {
           break;
         case "select":
           // Ignore the click that ends a vertex drag; keep selection when
-          // clicking a drag handle.
+          // clicking a drag handle. Also ignore the click a touch device
+          // synthesizes after a long-press already opened the query popup.
           if (justDragged) {
             justDragged = false;
+          } else if (justLongPressed) {
+            justLongPressed = false;
           } else if (!handleAt(map, e.point)) {
             // Drawn objects win the hit-test over custom-overlay features.
             const objId = hitTest(map, e.point);
@@ -425,6 +430,44 @@ export default function MapView() {
           break;
       }
     });
+
+    // Right-click (desktop) / long-press (mobile, which has no native
+    // right-click) as a quick-access alternative to switching to the query
+    // tool — matches OSM.org's own right-click "Query features" gesture,
+    // the original inspiration for this feature. Only while the pointer
+    // tool is active, so it never fights drawing.
+    map.on("contextmenu", (e) => {
+      if (useMapStore.getState().tool === "select") showOsmQueryPopup(map, e);
+    });
+
+    const LONG_PRESS_MS = 500;
+    const LONG_PRESS_MOVE_TOLERANCE = 10; // px — cancels if it turns into a pan
+    let longPressTimer: ReturnType<typeof setTimeout> | null = null;
+    let longPressStart: { x: number; y: number } | null = null;
+    let justLongPressed = false;
+    function clearLongPress() {
+      if (longPressTimer) clearTimeout(longPressTimer);
+      longPressTimer = null;
+      longPressStart = null;
+    }
+    map.on("touchstart", (e) => {
+      clearLongPress();
+      if (useMapStore.getState().tool !== "select" || e.points.length !== 1) return;
+      longPressStart = { x: e.point.x, y: e.point.y };
+      longPressTimer = setTimeout(() => {
+        longPressTimer = null;
+        justLongPressed = true;
+        showOsmQueryPopup(map, e);
+      }, LONG_PRESS_MS);
+    });
+    map.on("touchmove", (e) => {
+      if (!longPressStart) return;
+      const dx = e.point.x - longPressStart.x;
+      const dy = e.point.y - longPressStart.y;
+      if (Math.hypot(dx, dy) > LONG_PRESS_MOVE_TOLERANCE) clearLongPress();
+    });
+    map.on("touchend", clearLongPress);
+    map.on("touchcancel", clearLongPress);
 
     // Vertex drag editing: grab a handle, adjacent legs go straight while
     // dragging, snapped legs re-route on release.
@@ -624,7 +667,7 @@ export default function MapView() {
       <DrawHint />
       <ObjectsPanel />
       <LayerPanel />
-      <ProfilePanel />
+      <ProfilePanel obj={selectedObj} onClose={() => setSelected(null)} />
       <CustomOverlayData />
       {elevationM !== null && (
         <div className="absolute bottom-8 left-2 z-10 rounded-md bg-white/95 px-2 py-1 text-xs tabular-nums text-gray-700 shadow">

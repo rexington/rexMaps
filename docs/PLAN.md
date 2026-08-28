@@ -994,14 +994,56 @@ basemap all render correctly at the right location and zoom; the
 not-found state (nonexistent id) renders its own clean message rather
 than an error or a blank map.
 
-Not independently verified: the "Share" button/copy-link UI in
+Not independently verified at ship time: the "Share" button/copy-link UI in
 `ObjectsPanel.tsx` (`SavedMapRow`) — it's a real signed-in-only surface,
-and simulating Rex's actual Google session wasn't attempted (same
-boundary as the auth-migration pass — see above). Confirmed instead: the
-API layer it depends on (`PATCH`, `GET /api/maps` now including
-`is_public`) is correct and properly session-gated; the button itself
-follows the same optimistic-local-update pattern already proven correct
-in `handleDeleteSaved` right next to it.
+and simulating Rex's actual Google session wasn't attempted (same boundary
+as the auth-migration pass — see above). Rex confirmed it works.
+
+### Public elevation profiles + query-tool icon/gesture (done 2026-08-28)
+Two follow-ups from Rex after trying the public-link feature: public
+viewers couldn't see a route's elevation profile at all, and the query
+tool's icon was a magnifying glass — identical to SearchBox's, right next
+to it on the same toolbar.
+
+**Elevation profile on `/m/[id]`**: `ProfilePanel.tsx` used to read
+`selectedId`/`setSelected` straight from `useMapStore` — no store exists on
+the public viewer at all, so it couldn't be reused as-is. Refactored to
+take `obj`/`onClose` as props instead (MapView now passes its own
+store-backed selection down explicitly); the elevation-fetching and chart
+logic itself didn't change; it was never store-coupled to begin with
+(`elevationProfile()` samples Terrarium DEM tiles client-side, no auth,
+same as the authenticated app). `PublicMapView` adds its own local
+`selectedId` state and a click hit-test (same marker-beats-line-beats-polygon
+priority as MapView's own) — but deliberately does *not* feed that
+selection back into the objects source's `selected` property the way
+MapView does, since that also renders drag-handle dots (`objectLayers.ts`)
+that would be a false edit affordance on a read-only view. Verified via
+CDP against a seeded public line: clicking it renders the same chart
+(distance, gain/loss, elevation range, grade) as the authenticated app.
+
+**Query tool**: swapped the icon (was a literal duplicate of SearchBox's
+magnifying-glass path data) for a distinct info-circle glyph. Rex's other
+suggestion — right-click instead of a toolbar tool — turned out not to be
+either/or: added *both*. Right-click (`map.on("contextmenu", ...)`) now
+triggers the same query popup while the Select tool is active, without
+switching tools — matches OSM.org's own right-click "Query features",
+this feature's original inspiration. Touch has no right-click, so a
+manual long-press (500ms, cancelled by >10px movement so it doesn't fight
+panning) does the same on mobile; a `justLongPressed` flag suppresses the
+synthetic click a touch device fires on release, mirroring the existing
+`justDragged` guard right next to it. The query tool itself stays on the
+toolbar too — a persistent, discoverable option, not replaced.
+
+Verified via CDP with a seeded fake session (local D1 only): right-click
+at a point inside Rocky Mountain National Park opened the same
+enclosing-area popup the query tool itself produces, and confirmed the
+active tool stayed `"select"` throughout — the whole point of a
+gesture-based shortcut is not disturbing whatever tool was already active.
+Long-press itself (the touch path) wasn't independently verified — CDP's
+touch-event emulation wasn't attempted this pass; the underlying timer
+logic is straightforward and the popup-rendering path it calls into is
+already covered by the right-click test above, but the actual gesture on
+a real device is worth Rex trying once.
 
 ## Backlog / ideas
 

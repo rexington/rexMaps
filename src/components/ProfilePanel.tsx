@@ -5,7 +5,7 @@ import { useEffect, useRef, useState } from "react";
 import { elevationProfile, type ElevationProfile } from "@/lib/elevation";
 import { formatDistance, metersToFeet as ft } from "@/lib/geo";
 import { mapRef } from "@/lib/mapRef";
-import { useMapStore } from "@/store/mapStore";
+import type { MapObject } from "@/lib/objects";
 
 const W = 520;
 const H = 110;
@@ -45,9 +45,20 @@ interface ProfileResult {
   profile: ElevationProfile | null;
 }
 
-export default function ProfilePanel() {
-  const obj = useMapStore((s) => s.objects.find((o) => o.id === s.selectedId));
-  const setSelected = useMapStore((s) => s.setSelected);
+/**
+ * Shows the elevation profile of a selected line, on a hover-controlled SVG
+ * chart. Takes the object + a close callback as props rather than reading
+ * selection from the store directly — used both by MapView (backed by
+ * useMapStore's selection) and PublicMapView (backed by its own local
+ * selection state, since the public viewer has no store/session at all).
+ */
+export default function ProfilePanel({
+  obj,
+  onClose,
+}: {
+  obj: MapObject | undefined;
+  onClose: () => void;
+}) {
   const [result, setResult] = useState<ProfileResult | null>(null);
   const [hoverIdx, setHoverIdx] = useState<number | null>(null);
   const marker = useHoverMarker();
@@ -143,7 +154,7 @@ export default function ProfilePanel() {
           </span>
         )}
         <button
-          onClick={() => setSelected(null)}
+          onClick={onClose}
           className="ml-auto px-1 text-gray-400 hover:text-gray-700"
           aria-label="Close profile"
         >
