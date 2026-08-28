@@ -17,6 +17,7 @@ import {
   listCustomOverlays,
   type CustomOverlayInput,
 } from "@/lib/customOverlaysApi";
+import { fetchCurrentUser, signOut as signOutRequest, type SessionUser } from "@/lib/authClient";
 
 export interface Viewport {
   lng: number;
@@ -88,6 +89,14 @@ interface MapStore {
    * other overlapping packs. */
   removeOfflinePack: (id: string) => void;
   clearOfflinePacks: () => void;
+
+  // Sign-in state (see src/lib/auth.ts / authClient.ts). Not persisted —
+  // rechecked on every load via loadAuthUser(), since the source of truth is
+  // the session cookie, not anything the client should cache across visits.
+  authUser: SessionUser | null;
+  /** True once the initial /api/auth/me check has resolved — lets AuthGate
+   * distinguish "still checking" from "genuinely signed out". */
+  authChecked: boolean;
 
   // Custom overlays (user-supplied WFS catalogs, e.g. a SOTA summits server).
   // Private per account, server-backed (see src/lib/customOverlaysApi.ts) —
@@ -197,6 +206,8 @@ export const useMapStore = create<MapStore>()(
       currentMap: { id: null, title: "Untitled map" },
       dirty: false,
       offlinePacks: [],
+      authUser: null,
+      authChecked: false,
       customOverlays: [],
       customOverlaysLoaded: false,
       customOverlayStatus: {},
@@ -678,6 +689,19 @@ export function splitObjectAtVertex(id: string, idx: number) {
     splitting: false,
     dirty: true,
   }));
+}
+
+/** Checks the session cookie against the server. Called once from AuthGate
+ * on mount — the only way authUser gets populated, since sign-in state is
+ * deliberately never persisted locally. */
+export async function loadAuthUser() {
+  const user = await fetchCurrentUser();
+  useMapStore.setState({ authUser: user, authChecked: true });
+}
+
+export async function signOutAndClear() {
+  await signOutRequest();
+  useMapStore.setState({ authUser: null });
 }
 
 /** Fetches this account's custom overlays from the server. Called once from

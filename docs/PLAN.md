@@ -15,8 +15,9 @@ status column as stages complete, and log notable decisions in the Decision Log.
 - **Must-have features (from CalTopo):** sticky snap-to-trail routing, saving
   maps, route research tools, layer opacity + reordering.
 - **Platform:** Cloudflare Workers (Next.js via OpenNext adapter), D1 for saved
-  maps, R2 later for self-hosted tiles/offline. Auth via Cloudflare Access
-  (zero app code).
+  maps, R2 later for self-hosted tiles/offline. Auth is in-app (Google OIDC +
+  D1 sessions, `src/lib/auth.ts`) as of 2026-08-28 — reversed from the
+  original zero-app-code Cloudflare Access plan; see decision log.
 
 ## Stages
 
@@ -850,6 +851,85 @@ template literal, which 400'd. Caught immediately by running the real
 click-through-the-UI flow via CDP rather than trusting the curl
 verification alone.
 
+### In-app auth: Google Sign-In, replacing Cloudflare Access (in progress, started 2026-08-28)
+Started as a request to design backlog #18 (public map share links). Access
+turned out to be the wrong foundation for it: worker-level Access is an
+all-or-nothing edge switch, so "this one map is public" meant a separate,
+narrower, path-scoped Access **Bypass** Application layered on top — real
+and workable (confirmed against current Cloudflare docs: hostname/path-scoped
+apps evaluate before, and win over, worker-level Access) but with real
+friction once actually enumerated: the bypass set isn't just the map-view
+route, it's every static asset that route loads (`/_next/static/*`, the
+MapLibre worker files), bypassing those makes the whole client JS bundle —
+and the client-exposed API keys baked into it — fetchable by anyone, and the
+whole mechanism is manual dashboard config repeated per future public
+surface, with no route to self-serve signup at all. Rex named the real
+problem directly: Access fit "secure the whole app," not "per-resource
+visibility, with signup later" — the requirements had outgrown it.
+
+**Chosen approach**: hand-rolled Google OpenID Connect rather than an auth
+library. The deciding argument was that the verification code already
+existed and was already proven — `src/lib/access.ts`'s Access-JWT check is
+`createRemoteJWKSet` + `jwtVerify` against a live JWKS, checking iss/aud;
+`src/lib/auth.ts` does the identical shape against Google's JWKS instead.
+`jose` was already a dependency, D1 was already wired. A library (Better
+Auth was the alternative considered) would have meant verifying its
+Workers/OpenNext runtime behavior before trusting it with security code —
+that verification, not the code itself, would have been the actual cost.
+
+**What Access was quietly providing, now built explicitly**:
+- **Sessions**: D1-backed (`users`, `sessions` — `migrations/0004_create_users_sessions.sql`),
+  not a self-contained signed cookie, so a session can be revoked (`DELETE`)
+  rather than only expiring on its own.
+- **Per-route authorization**: every `/api/maps/*` and `/api/custom-overlays*`
+  handler now calls `sessionUser(req, env)` explicitly and 401s on null —
+  previously implicit, since Access sat in front of the whole Worker.
+  `custom_overlays`' existing per-owner scoping (`WHERE owner = ?1`) is
+  unchanged, just fed by the session's email instead of the Access JWT's.
+- **`owner` on `maps`** (backlog #16, `migrations/0005_maps_add_owner.sql`,
+  backfilled to Rex): bundled into this pass since "is this map public" and
+  "who may edit it" are both real per-row facts now that there's more than
+  one identity concept in play. Deliberately *not* an edit restriction —
+  `maps` stays a shared pool, any signed-in user may still edit any map,
+  matching the behavior Access already provided.
+- **A gate on who can sign in**: `AUTH_ALLOWED_EMAILS`, checked once at first
+  sign-in (not re-checked per request). An entry starting with `@` matches a
+  whole domain — deliberately mirroring the Access policy this replaces
+  (which allowed all of `vokey.org`, not one address — "Rex is fine with
+  family members having access," 2026-08-25) rather than quietly narrowing
+  access as a side effect of swapping mechanisms. Set to `@vokey.org`.
+- **The app shell itself** now has to branch on auth state — `/` is
+  reachable by anyone once Access stops gating it, so `AuthGate` (wrapping
+  `MapApp` in `page.tsx`) checks `/api/auth/me` on mount and shows a plain
+  "Sign in with Google" prompt instead of the editor when signed out. This
+  is *not* the landing/marketing page Rex separately floated and this pass
+  deliberately left out of scope — no new route, no new content, just the
+  existing shell reading session state.
+
+**Sequencing, deliberate**: built and shipped with Worker-level Access left
+**on**. The new session/authz code runs behind Access exactly like
+everything else does today; every route already rejects an unauthenticated
+request on its own (verified locally pre-deploy: 401 on `/api/maps` and
+`/api/custom-overlays` with no session cookie, correct Google consent-screen
+redirect with a state cookie from `/api/auth/login`, clean 400s on
+missing/mismatched OAuth state, a clean 502 — not a crash — on a bogus
+authorization code exchanged against Google's real token endpoint; schema
+verified locally then applied to the remote D1). Confirmed post-deploy that
+Access still fronts `maps.ke6mt.us` exactly as before (a bare curl still
+gets redirected to the Access login) — this pass changed nothing about the
+edge boundary yet, only added a second, independent gate behind it.
+**Turning off Worker-level Access is a deliberate later step**, done only
+once Rex has completed a real interactive Google sign-in against the live
+app (the one leg that can't be verified without his actual Google account)
+and the whole flow is confirmed solid. `src/lib/access.ts` becomes unused
+dead code at that point — remove it then, not before.
+
+**Still open**: Access isn't off yet; `src/lib/access.ts` is still present
+but now unused by any route; the actual public-map-link feature (backlog
+#18 — `is_public` column, `/m/[id]` view, `/api/public-maps/[id]`) is next,
+and is genuinely simpler now — a route that just skips the `sessionUser()`
+check on purpose, no Bypass-Application/static-asset gymnastics required.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These
@@ -861,7 +941,7 @@ data-sourcing/research risk, or multiple sessions.
 | # | Effort | Category | Item | Notes |
 |---|--------|----------|------|-------|
 | 1 | S | Drawing/Objects | ✅ Per-object opacity; adjustable width for polygon outlines + marker size | Done 2026-08-25 — see notes below |
-| 2 | S | Access | Google as a 2nd identity provider | For friends outside the `vokey.org` domain policy; needs a Google Cloud Console OAuth client (personal Gmail works, confirmed against current docs during Stage 5). `src/lib/access.ts` already treats identity as an opaque string, so this is dashboard config + maybe a second accepted issuer, not a rework |
+| 2 | S | Access | ✅ Google as identity provider | Superseded 2026-08-28 — Google OIDC became the *primary* (only) sign-in method, not a 2nd one alongside Access. See decision log |
 | 3 | M | Drawing/Objects | ✅ Line/track simplification | Done 2026-08-25 — see notes below |
 | 4 | M | Drawing/Objects | ✅ Marker styles — icon picker, CalTopo-style but better | Done 2026-08-25 — see notes below |
 | 5 | M | Saved maps | Folders for saved maps | New D1 table (`folders`) + API route + UI grouping in the saved-maps list — second table in the schema, first one was just `maps` |
@@ -872,12 +952,12 @@ data-sourcing/research risk, or multiple sessions.
 | 10 | L | Layers/Data | Private land ownership (parcels) | No free unified national dataset — parcels are county-by-county, wildly inconsistent. May be better solved *by* item 9 (let Rex plug in his own county's GIS parcel service) than by rexMaps building/maintaining a national layer |
 | 11 | L | Layers/Data | Classic scanned FSTopo quads, self-hosted | Real data pipeline: georeferenced GeoTIFFs from USFS FSGeodata → PMTiles → R2, plus a new tile protocol to serve them (same shape as the `slope://`/`sentinel://` custom protocols) |
 | 12 | L | Layers/Data | Weather (NOAA forecast grids) + snow depth (SNODAS) overlays | Not simple XYZ tiles — GRIB/WMS sources likely need real conversion, unlike the ArcGIS-pattern layers above |
-| 13 | L | Collaboration | Live multi-user / live location sharing | Needs Durable Objects + WebSockets (worker-level Access 403s on WebSocket upgrades — see Stage 5 — so this hostname would need to switch to a classic hostname-scoped Access app); also revisits the current single-policy Auth model |
+| 13 | L | Collaboration | Live multi-user / live location sharing | Needs Durable Objects + WebSockets. The worker-level-Access-403s-on-WebSockets caveat (Stage 5) goes away once Access is fully retired (backlog, in progress — see decision log 2026-08-28); auth/authz is now per-route app code either way |
 | 14 | L (gated) | Infra | Worker-proxy + R2/Cache tile caching for Sentinel | **Only relevant if the app goes multi-user** — quota is per CDSE instance ID. Pointless solo: ~1–2k of the 10k monthly requests used, and the rolling `TIME` window makes recent-imagery tiles cache-hostile anyway. Google tiles excluded regardless (ToS forbids caching/proxying) |
 | 15 | S | Layers/Data | ✅ Custom overlays: private per-account, server-backed | Done 2026-08-27 — see notes above. Identity-verification foundation (`src/lib/access.ts`) this row's approach reuses |
-| 16 | M | Saved maps | Ownership retrofit on `maps` | Add an `owner` column + scope `/api/maps`, mirroring `custom_overlays`'s pattern exactly — deliberately not bundled into #15 since `maps` being a shared pool was a known, accepted state, not a bug |
+| 16 | M | Saved maps | ✅ Ownership retrofit on `maps` | Done 2026-08-28, bundled into the auth-migration pass (see decision log) — `owner` column added, backfilled to Rex. Deliberately *not* scoped to owner-only writes: `maps` stays a shared, any-signed-in-user-may-edit pool, same as before; `owner` just records who created each row |
 | 17 | M | Layers/Data | Layer-vs-overlay toggle for custom sources | Let a custom WFS source be treated as a base layer (bottom-insertion, vector-exclusivity rules) instead of always an overlay — `addLayer()`'s vector/raster insertion logic in mapStore.ts would need a third case |
-| 18 | M | Collaboration | No-auth map sharing (share link, read-only) | Distinct from #13 — a single map made viewable without Cloudflare Access, e.g. a signed/opaque share token checked in the route handler rather than through the edge Access policy. Needs its own threat-model pass since it's the one deliberate hole in "everything sits behind Access" |
+| 18 | M | Collaboration | No-auth map sharing (share link, read-only) | The original ask that triggered the auth migration (2026-08-28) — a single map viewable via a direct link, no sign-in. Was going to need a Cloudflare Access path-Bypass Application + careful static-asset enumeration; now that auth is in-app, it's just a route that skips the `sessionUser()` check on purpose. Not yet built — comes after Access is fully retired (see decision log) |
 | 19 | L | Platform | Mobile-native app (iOS, then Android) | Rex-stated future direction, no design work done yet. `maps`/`custom_overlays` already being real API-backed (not just localStorage) is what makes this feasible at all — a native client would talk to the same `/api/*` routes |
 
 ## Decision log
@@ -899,4 +979,5 @@ data-sourcing/research risk, or multiple sessions.
 - **2026-08-25** Access configured and live: policy allows the `vokey.org` email domain (not a single address) — deliberate, Rex is fine with family members having access. **Stage 5 complete.** Google as a second IdP (for friends outside the family domain) backlogged, confirmed against current docs: needs a Google Cloud Console OAuth client, works with personal Gmail.
 - **2026-08-25** Top bar overlap fix: `ObjectsPanel` and `LayerPanel` were both anchored `top-2` like the centered Toolbar/SearchBox row, so at moderate window widths (confirmed overlapping by ~950px wide with the search box open) the corner panels' expanded content visually collided with the map tools. Fixed by moving both corner panels to `top-14`, clearing the tools row entirely regardless of viewport width, rather than a full flex/grid rewrite of the four independently-absolutely-positioned top overlays. `max-h-[calc(100dvh-Xrem)]` scroll caps adjusted from 5rem to 8rem to preserve the same bottom clearance.
 - **2026-08-27** Account/ownership architecture: chose **private per person** over a shared pool for anything new (Rex, deliberately — "like CalTopo," an inaccessible layer just doesn't show). Built the identity-verification foundation (`src/lib/access.ts` — verifies the Access JWT, not the authenticated-user-email header) and applied it to custom overlays first, since that gap was concrete and already found (localStorage-only, invisible on a second device). `maps` stays a shared pool for now; retrofitting ownership onto it is backlog #16, not bundled into this pass. Longer roadmap (2nd IdP, layer/overlay toggle, no-auth sharing, mobile-native) captured as backlog #2/#17/#18/#19.
+- **2026-08-28** Auth reversed: **Cloudflare Access replaced by in-app auth** (Google OIDC + D1 sessions). Started as a request to design backlog #18 (public map share links); researching the mechanism (a path-scoped Access Bypass Application, verified against current Cloudflare docs — more-specific-path rules win over worker-level Access) surfaced real friction Rex then named directly: Access is an all-or-nothing edge switch, expressing "this one map is public" as path gymnastics plus manual per-surface dashboard config was the wrong shape, and it has no route to self-serve signup at all. See "In-app auth" write-up below for what shipped and what's still open (Access itself isn't off yet).
 - **2026-08-24** Stage 4: Sentinel imagery via **CDSE Sentinel Hub WMTS** (user created a CDSE account; 10 m beats GIBS HLS's 30 m; free tier 10k req/mo). Slope shading is computed client-side through a MapLibre custom protocol rather than pre-rendered tiles — zero hosting cost, works offline once DEM tiles are cached, and reuses the Terrarium pipeline from elevation profiles. Nominatim search is Enter-only to respect their no-autocomplete policy. Line hit-testing got a ±4 px box (user feedback: thin lines were hard to click); object rename input got an explicit white background (was transparent over the panel).

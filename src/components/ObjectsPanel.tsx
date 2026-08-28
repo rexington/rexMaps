@@ -28,7 +28,7 @@ import {
   updateMap,
   type SavedMapSummary,
 } from "@/lib/savedMaps";
-import { useMapStore } from "@/store/mapStore";
+import { signOutAndClear, useMapStore } from "@/store/mapStore";
 
 function download(filename: string, mime: string, content: string) {
   const url = URL.createObjectURL(new Blob([content], { type: mime }));
@@ -307,7 +307,13 @@ export default function ObjectsPanel() {
   const objects = useMapStore((s) => s.objects);
   const currentMap = useMapStore((s) => s.currentMap);
   const dirty = useMapStore((s) => s.dirty);
+  const authUser = useMapStore((s) => s.authUser);
   const { setTitle, newMap, loadMap, markSaved, importObjects } = useMapStore();
+
+  async function handleSignOut() {
+    if (dirty && !confirm("Discard unsaved changes?")) return;
+    await signOutAndClear();
+  }
 
   const [open, setOpen] = useState(false);
   const [savedList, setSavedList] = useState<SavedMapSummary[] | null>(null);
@@ -524,6 +530,17 @@ export default function ObjectsPanel() {
               </ul>
             )}
           </div>
+
+          {authUser && (
+            <div className="flex items-center justify-between border-t border-gray-200 px-1 pt-2 text-xs text-gray-500">
+              <span className="truncate" title={authUser.email}>
+                Signed in as {authUser.email}
+              </span>
+              <button onClick={handleSignOut} className="shrink-0 text-gray-400 hover:text-gray-700">
+                Sign out
+              </button>
+            </div>
+          )}
         </div>
       )}
     </div>

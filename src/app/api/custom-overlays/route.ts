@@ -1,5 +1,5 @@
 import { getCloudflareContext } from "@opennextjs/cloudflare";
-import { accessIdentity } from "@/lib/access";
+import { sessionUser } from "@/lib/auth";
 import { parseCustomOverlayInput } from "@/lib/customOverlaysApi";
 import type { CustomOverlayDef } from "@/lib/layers/customOverlay";
 
@@ -29,13 +29,13 @@ function toDef(row: Row): CustomOverlayDef {
 
 export async function GET(req: Request) {
   const { env } = getCloudflareContext();
-  const owner = await accessIdentity(req, env);
-  if (!owner) return Response.json({ error: "unauthorized" }, { status: 401 });
+  const user = await sessionUser(req, env);
+  if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
 
   const { results } = await env.DB.prepare(
     "SELECT id, name, url, type_name, color, label_field, property_names FROM custom_overlays WHERE owner = ?1 ORDER BY created_at",
   )
-    .bind(owner)
+    .bind(user.email)
     .all<Row>();
 
   return Response.json(results.map(toDef));
@@ -43,8 +43,8 @@ export async function GET(req: Request) {
 
 export async function POST(req: Request) {
   const { env } = getCloudflareContext();
-  const owner = await accessIdentity(req, env);
-  if (!owner) return Response.json({ error: "unauthorized" }, { status: 401 });
+  const user = await sessionUser(req, env);
+  if (!user) return Response.json({ error: "unauthorized" }, { status: 401 });
 
   const input = parseCustomOverlayInput(await req.json().catch(() => null));
   if (!input) return Response.json({ error: "invalid payload" }, { status: 400 });
@@ -55,7 +55,7 @@ export async function POST(req: Request) {
   )
     .bind(
       id,
-      owner,
+      user.email,
       input.name,
       input.url,
       input.typeName,

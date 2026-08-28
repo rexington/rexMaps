@@ -1,5 +1,10 @@
+import AuthGate from "@/components/AuthGate";
 import MapApp from "@/components/MapApp";
 
 export default function Home() {
-  return <MapApp />;
+  return (
+    <AuthGate>
+      <MapApp />
+    </AuthGate>
+  );
 }

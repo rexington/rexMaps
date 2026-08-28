@@ -15,7 +15,7 @@ export interface SavedMapSummary {
   updated_at: number;
 }
 
-/** Server-side validation (light — single user behind Cloudflare Access). */
+/** Server-side validation (light — a trusted family pool behind in-app session auth). */
 export function parseMapPayload(
   body: unknown,
 ): { title: string; data: SavedMapData } | null {

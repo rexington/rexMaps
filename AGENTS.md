@@ -21,7 +21,16 @@ decision log. `docs/LAYERS.md` catalogs every tile source with endpoints/terms.
 - MapLibre GL v6 + zustand (`persist` → localStorage) + Tailwind v4 + dnd-kit.
 - D1 (saved maps, Stage 2+): binding commented in `wrangler.jsonc`; access via
   `getCloudflareContext().env` in route handlers.
-- Auth is **Cloudflare Access** at the edge — never add in-app auth.
+- Auth is **in-app**: Google OpenID Connect + D1-backed sessions
+  (`src/lib/auth.ts`, `sessionUser()`). Reversed 2026-08-28 — Cloudflare
+  Access was an all-or-nothing edge switch with no way to let one route
+  (e.g. a public shared-map view) through while keeping the rest gated, and
+  no route to self-serve signup. **Transitional**: Worker-level Access
+  still fronts the whole app for now, deliberately kept on until the new
+  session/authz code is fully verified live; every route's authorization
+  comes from `sessionUser()`, not Access, already. `src/lib/access.ts`
+  (Access JWT verification) is unused dead code once Access is switched
+  off — remove it then, not before. See docs/PLAN.md decision log.
 
 ## Architecture invariants
 - All tile/layer access is declared in `src/lib/layers/registry.ts` and rendered
