@@ -25,12 +25,6 @@
 	// Settings → Custom Pages; AUD tag is on the rexmaps Access application's
 	// Overview tab. Empty until filled in below fails closed (401), not open.
 	"vars": {
-		// Cloudflare Access — being phased out as the user-facing gate in favor
-		// of in-app Google sign-in (src/lib/auth.ts); left in place until that
-		// migration is verified end-to-end and Access is turned off. See
-		// docs/PLAN.md.
-		"CF_ACCESS_TEAM_DOMAIN": "vokey.cloudflareaccess.com",
-		"CF_ACCESS_AUD": "514bfb452d6999b47427811034483659134088fbb4fd93242e5abcedf893721c",
 		// Google OAuth client ID — public by design (it's embedded in every
 		// sign-in redirect URL); the client *secret* is a wrangler secret, not
 		// a var. AUTH_ALLOWED_EMAILS: comma-separated; an entry starting with

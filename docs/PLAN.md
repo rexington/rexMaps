@@ -851,7 +851,7 @@ template literal, which 400'd. Caught immediately by running the real
 click-through-the-UI flow via CDP rather than trusting the curl
 verification alone.
 
-### In-app auth: Google Sign-In, replacing Cloudflare Access (in progress, started 2026-08-28)
+### In-app auth: Google Sign-In, replacing Cloudflare Access (done 2026-08-28)
 Started as a request to design backlog #18 (public map share links). Access
 turned out to be the wrong foundation for it: worker-level Access is an
 all-or-nothing edge switch, so "this one map is public" meant a separate,
@@ -924,11 +924,24 @@ app (the one leg that can't be verified without his actual Google account)
 and the whole flow is confirmed solid. `src/lib/access.ts` becomes unused
 dead code at that point — remove it then, not before.
 
-**Still open**: Access isn't off yet; `src/lib/access.ts` is still present
-but now unused by any route; the actual public-map-link feature (backlog
-#18 — `is_public` column, `/m/[id]` view, `/api/public-maps/[id]`) is next,
-and is genuinely simpler now — a route that just skips the `sessionUser()`
-check on purpose, no Bypass-Application/static-asset gymnastics required.
+**Closed out**: Rex confirmed a real interactive Google login worked (a
+`users` row for rex@vokey.org appeared in remote D1 at the moment of
+sign-in — checked directly, not just inferred from a successful-looking
+redirect), then confirmed save/load and custom overlays still worked
+through the new session. Rex then turned off Worker-level Access in the
+dashboard. Re-verified immediately after with the edge gate genuinely
+gone (not simulated): `/` now 200s directly (no more Access redirect);
+`/api/maps` and `/api/custom-overlays` (GET/POST/DELETE, authenticated and
+not) still correctly 401 with no session cookie, proving app-level
+`sessionUser()` was doing real work all along and not riding on Access as
+a backstop; an anonymous POST to `/api/maps` was rejected before writing
+anything (confirmed directly against D1, no stray row). `src/lib/access.ts`
+and the `CF_ACCESS_*` vars/dev-bypass removed as the final cleanup step.
+
+**Next**: the actual public-map-link feature (backlog #18 — `is_public`
+column, `/m/[id]` view, `/api/public-maps/[id]`) is now genuinely simple —
+a route that just skips the `sessionUser()` check on purpose, no
+Bypass-Application/static-asset gymnastics required.
 
 ## Backlog / ideas
 

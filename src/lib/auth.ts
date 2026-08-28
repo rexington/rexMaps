@@ -7,9 +7,10 @@ import { createRemoteJWKSet, jwtVerify } from "jose";
  * self-serve signup (see docs/PLAN.md decision log, 2026-08-28). Sign-in is
  * Google OpenID Connect; this file verifies the ID token and manages the
  * app's own D1-backed sessions from there. Same JWT-verification shape as
- * the Access identity check it replaces (`createRemoteJWKSet` + `jwtVerify`
- * against a live JWKS, checking iss/aud) — see src/lib/access.ts — just
- * pointed at Google's JWKS instead of Access's own.
+ * the Access identity check this replaced (`createRemoteJWKSet` + `jwtVerify`
+ * against a live JWKS, checking iss/aud) — now pointed at Google's JWKS
+ * instead of Access's own (that code is gone; Access itself was turned off
+ * 2026-08-28 once this was verified live).
  */
 
 export interface AuthEnv {
