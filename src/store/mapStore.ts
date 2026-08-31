@@ -79,6 +79,10 @@ interface MapStore {
   // Saved-map tracking
   currentMap: { id: string | null; title: string };
   dirty: boolean;
+  /** Off by default — an explicit opt-in, not a silent behavior change.
+   * See the debounced-save effect in ObjectsPanel.tsx. */
+  autosaveEnabled: boolean;
+  setAutosaveEnabled: (enabled: boolean) => void;
 
   // Offline areas (Stage 6b) — metadata only; tile bytes live in Cache Storage.
   offlinePacks: OfflinePackMeta[];
@@ -205,6 +209,7 @@ export const useMapStore = create<MapStore>()(
       sentinel: { days: 7, mode: "latest" },
       currentMap: { id: null, title: "Untitled map" },
       dirty: false,
+      autosaveEnabled: false,
       offlinePacks: [],
       authUser: null,
       authChecked: false,
@@ -295,6 +300,7 @@ export const useMapStore = create<MapStore>()(
       },
 
       toggleSnap: () => set((s) => ({ snapEnabled: !s.snapEnabled })),
+      setAutosaveEnabled: (enabled) => set({ autosaveEnabled: enabled }),
 
       addMarker: (pt) =>
         set((s) => {
@@ -428,6 +434,7 @@ export const useMapStore = create<MapStore>()(
         sentinel: s.sentinel,
         currentMap: s.currentMap,
         dirty: s.dirty,
+        autosaveEnabled: s.autosaveEnabled,
         offlinePacks: s.offlinePacks,
       }),
       migrate: (persisted) => persisted as MapStore,

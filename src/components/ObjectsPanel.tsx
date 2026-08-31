@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { formatDistance } from "@/lib/geo";
 import { parseImport, toGPX, toGeoJSON } from "@/lib/gpx";
 import { mapRef } from "@/lib/mapRef";
@@ -386,6 +386,8 @@ export default function ObjectsPanel() {
   const currentMap = useMapStore((s) => s.currentMap);
   const dirty = useMapStore((s) => s.dirty);
   const authUser = useMapStore((s) => s.authUser);
+  const autosaveEnabled = useMapStore((s) => s.autosaveEnabled);
+  const setAutosaveEnabled = useMapStore((s) => s.setAutosaveEnabled);
   const { setTitle, newMap, loadMap, markSaved, importObjects } = useMapStore();
 
   async function handleSignOut() {
@@ -421,6 +423,38 @@ export default function ObjectsPanel() {
       setBusy(false);
     }
   }
+
+  const AUTOSAVE_DEBOUNCE_MS = 3000;
+  // Off by default (a checkbox, not a silent behavior change). Fires once
+  // ~3s after an edit makes the map dirty — reads fresh state at fire time
+  // rather than closing over this render's currentMap/objects, since more
+  // edits during the debounce window shouldn't get lost to a stale
+  // snapshot. Silent on failure (console only): an autosave shouldn't
+  // interrupt whatever the user's doing with an alert() the way a manual
+  // Save click's failure should.
+  useEffect(() => {
+    if (!autosaveEnabled || !dirty) return;
+    const t = setTimeout(async () => {
+      const s = useMapStore.getState();
+      if (!s.dirty) return; // saved via the manual button meanwhile
+      const title = s.currentMap.title.trim() || "Untitled map";
+      const snap = { objects: s.objects, stack: s.stack, viewport: s.viewport };
+      try {
+        if (s.currentMap.id) {
+          await updateMap(s.currentMap.id, title, snap);
+          markSaved(s.currentMap.id);
+        } else {
+          const { id } = await createMap(title, snap);
+          markSaved(id);
+        }
+        setSavedList(null);
+      } catch (err) {
+        console.warn("Autosave failed", err);
+      }
+    }, AUTOSAVE_DEBOUNCE_MS);
+    return () => clearTimeout(t);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- reads fresh state at fire time; only dirty/autosaveEnabled should retrigger
+  }, [autosaveEnabled, dirty]);
 
   async function handleOpenList() {
     if (savedList) {
@@ -519,6 +553,16 @@ export default function ObjectsPanel() {
               </span>
             )}
           </div>
+
+          <label className="flex items-center gap-1.5 px-1 text-xs text-gray-500">
+            <input
+              type="checkbox"
+              checked={autosaveEnabled}
+              onChange={(e) => setAutosaveEnabled(e.target.checked)}
+              className="h-3.5 w-3.5"
+            />
+            Autosave (~3s after each change)
+          </label>
 
           <div className="flex flex-wrap gap-1.5">
             <button className={btn} onClick={handleNew}>New</button>

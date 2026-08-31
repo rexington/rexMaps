@@ -21,6 +21,15 @@ export const metadata: Metadata = {
 
 export const viewport: Viewport = {
   themeColor: "#047857",
+  // The map's own pinch/double-tap zoom (MapLibre's internal touch
+  // handlers) is independent of the browser's native page zoom — without
+  // this, a pinch on the map also zooms the whole page, shoving the
+  // toolbar/panels out of the viewport. This only disables the browser's
+  // page-level zoom; MapLibre's gestures on the map canvas are unaffected.
+  width: "device-width",
+  initialScale: 1,
+  maximumScale: 1,
+  userScalable: false,
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

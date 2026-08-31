@@ -1045,6 +1045,62 @@ logic is straightforward and the popup-rendering path it calls into is
 already covered by the right-click test above, but the actual gesture on
 a real device is worth Rex trying once.
 
+### Disable browser page-zoom on mobile; optional autosave (done 2026-08-29)
+Two small requests. **Page-zoom**: `viewport` export in `layout.tsx` gained
+`maximumScale: 1, userScalable: false` (plus explicit `width`/
+`initialScale`, previously left to Next's defaults). This is independent
+of MapLibre's own pinch/rotate touch handling on the map canvas — one's the
+browser's native page-level zoom, the other's the map library's internal
+gesture recognition — so disabling the former doesn't touch the latter.
+Verified the rendered `<meta name="viewport">` tag carries the right
+content string; the actual pinch-gesture behavior itself needs a real
+touch device to fully confirm, same category as the long-press item above.
+
+**Autosave**: a checkbox in `ObjectsPanel.tsx`, default **off** (Rex's
+explicit ask — opt-in, not a silent behavior change), backed by a new
+persisted `autosaveEnabled` store field. When on, a `useEffect` keyed on
+`[autosaveEnabled, dirty]` starts a 3s timer the moment an edit makes the
+map dirty; at fire time it reads `useMapStore.getState()` fresh (not the
+render-closure's `currentMap`/`objects`) so further edits during the
+debounce window aren't lost to a stale snapshot, then does the same
+create-or-update `handleSave()` already does — except silent on failure
+(`console.warn`, not an `alert()`, since a background autosave shouldn't
+interrupt whatever the user's doing). Deliberately *not* a sliding-window debounce that resets on every edit: it
+fires once ~3s after the map first goes dirty, which bounds how much work
+a long continuous editing burst could ever cost if the tab closed
+mid-burst, rather than a reset-on-every-edit scheme that could in
+principle never settle long enough to fire.
+
+Verified via CDP with a seeded fake session: with autosave off, an edit
+followed by a 5s wait left the map dirty and unsaved (`currentMap.id` still
+null) — confirming the default really is inert, not just labeled that way.
+Turning it on and editing again produced a real D1 row within ~4s
+(`dirty` false, a new `currentMap.id`); a further edit after that reused
+the same id (update, not a second row) — confirmed directly against D1,
+not just store state.
+
+**Real bug found while verifying the viewport-meta change, worth recording
+generally**: the deployed change didn't show up on a plain `curl
+https://maps.ke6mt.us/` — only on a cache-busted request. `/` and `/m/[id]`
+have no server-side data dependency (everything's client-fetched), so
+Next classified them as static pages and sent `Cache-Control:
+s-maxage=31536000` — a full year. Cloudflare's edge cache honors that, and
+unlike Vercel's own platform there's no integrated purge-on-deploy, so a
+new deploy's HTML can stay invisible behind a year-old cached copy
+indefinitely (per Next's own CDN-caching guide: CDN purges are the
+deploying platform's responsibility to trigger, not automatic). This risk
+was likely **newly exposed by the Access removal** (2026-08-28) — Access's
+login-redirect flow probably prevented `/` from ever being a plain,
+stably-cacheable GET before now, masking it. Fixed with `export const
+dynamic = "force-dynamic"` on both page components — verified locally
+(Cache-Control flips to `private, no-cache, no-store`) and confirmed live
+post-deploy. No manual Cloudflare cache purge was needed this time (the
+new deploy's response happened to already be what a plain curl returned),
+but if a future deploy to either of these shells ever appears stale
+despite a successful `wrangler deploy`, this is the first thing to check —
+and the fix would be a dashboard cache purge (this session's wrangler
+token has no `cache_purge` scope), not more code changes.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These
