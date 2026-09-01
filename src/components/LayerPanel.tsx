@@ -253,11 +253,10 @@ export default function LayerPanel() {
   const overlays = available.filter((d) => d.category === "overlay");
 
   return (
-    <div className="absolute right-2 top-2 z-10 w-72 max-w-[calc(100vw-1rem)] select-none sm:top-14">
-      {/* sm:top-14, not top-2: on desktop this clears the centered
-          Toolbar/SearchBox row so an expanded panel can't overlap the map
-          tools; on mobile the toolbar moves off to the right instead, so
-          top-2 is free. */}
+    <div className="absolute right-2 top-2 z-10 w-72 max-w-[calc(100vw-1rem)] select-none">
+      {/* Was sm:top-14 on desktop (clearing the centered Toolbar/SearchBox
+          row) — moved back to top-2 per request; see the matching note in
+          ObjectsPanel.tsx. */}
       <button
         onClick={() => setOpen((o) => !o)}
         className="mb-1 ml-auto block rounded-md bg-white/95 px-3 py-1.5 text-sm font-medium text-gray-800 shadow"
@@ -265,7 +264,7 @@ export default function LayerPanel() {
         {open ? "Layers ▾" : "Layers ▸"}
       </button>
       {open && (
-        <div className="max-h-[calc(100dvh-5rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur sm:max-h-[calc(100dvh-8rem)]">
+        <div className="max-h-[calc(100dvh-5rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur">
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}

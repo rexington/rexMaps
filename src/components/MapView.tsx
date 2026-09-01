@@ -8,6 +8,7 @@ import {
   ScaleControl,
   setWorkerUrl,
   type GeoJSONSource,
+  type LngLat as MaplibreLngLat,
   type MapMouseEvent,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
@@ -256,6 +257,135 @@ function showOsmQueryPopup(map: MaplibreMap, e: Pick<MapMouseEvent, "lngLat">) {
     });
 }
 
+type ContextMenuState = { lngLat: MaplibreLngLat; x: number; y: number };
+
+// Matches ContextMenu's w-56 plus an approximation of its rendered height
+// (4 rows + padding) — used only to keep the menu from opening off-screen,
+// so an approximate height is fine.
+const CONTEXT_MENU_W = 224;
+const CONTEXT_MENU_H = 196;
+
+function clampMenuPos(x: number, y: number, boundsW: number, boundsH: number) {
+  return {
+    x: Math.max(4, Math.min(x, boundsW - CONTEXT_MENU_W - 4)),
+    y: Math.max(4, Math.min(y, boundsH - CONTEXT_MENU_H - 4)),
+  };
+}
+
+/** Right-click (desktop) / long-press (mobile) context menu: coordinates
+ * (with copy), the OSM feature query that direct right-click used to run
+ * immediately, adding a marker at the spot, and a NOAA forecast link.
+ * Closes itself on any pointerdown outside its own DOM node — see MapView's
+ * "movestart"/Escape handling for the other two close paths. */
+function ContextMenu({
+  map,
+  state,
+  onClose,
+}: {
+  map: MaplibreMap;
+  state: ContextMenuState;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDivElement>(null);
+  const [copied, setCopied] = useState(false);
+
+  useEffect(() => {
+    // Capturing phase + pointerdown (not click): fires before the map's own
+    // click handling, and — critically for the long-press-open path — the
+    // touch that opened this menu has already had its one real pointerdown
+    // fire *before* this effect ever attaches (the long-press timer only
+    // fires ~500ms after that), so this can't self-close the menu it just
+    // opened. The synthetic "click" a touch device fires after a long-press
+    // is a separate, already-handled concern (see justLongPressed).
+    function onPointerDown(e: PointerEvent) {
+      if (ref.current && !ref.current.contains(e.target as Node)) onClose();
+    }
+    document.addEventListener("pointerdown", onPointerDown, true);
+    return () => document.removeEventListener("pointerdown", onPointerDown, true);
+  }, [onClose]);
+
+  const { lng, lat } = state.lngLat;
+  const coordText = `${lat.toFixed(6)}, ${lng.toFixed(6)}`;
+
+  async function copyCoords() {
+    try {
+      await navigator.clipboard.writeText(coordText);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    } catch {
+      prompt("Copy this location:", coordText);
+    }
+  }
+
+  function runQuery() {
+    showOsmQueryPopup(map, { lngLat: state.lngLat });
+    onClose();
+  }
+
+  function placeMarker() {
+    useMapStore.getState().addMarker([lng, lat]);
+    onClose();
+  }
+
+  const weatherUrl = `https://forecast.weather.gov/MapClick.php?lat=${lat}&lon=${lng}&site=all&smap=1`;
+  const itemClass =
+    "flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm text-gray-700 hover:bg-gray-100";
+
+  return (
+    <div
+      ref={ref}
+      style={{ left: state.x, top: state.y }}
+      className="absolute z-20 w-56 overflow-hidden rounded-lg bg-white/95 py-1 shadow-lg ring-1 ring-black/5"
+    >
+      <button onClick={copyCoords} className={`${itemClass} justify-between`}>
+        <span className="tabular-nums">{copied ? "Copied!" : coordText}</span>
+        <svg
+          viewBox="0 0 24 24"
+          className="h-4 w-4 shrink-0"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <rect x="8" y="8" width="12" height="12" rx="2" />
+          <path d="M4 16V6a2 2 0 0 1 2-2h10" />
+        </svg>
+      </button>
+      <hr className="border-gray-200" />
+      <button onClick={runQuery} className={itemClass}>
+        <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="none" stroke="currentColor" strokeWidth="2">
+          <circle cx="12" cy="12" r="9" />
+          <path d="M12 11v5" strokeLinecap="round" />
+          <circle cx="12" cy="7.5" r="1" fill="currentColor" stroke="none" />
+        </svg>
+        What&apos;s here?
+      </button>
+      <button onClick={placeMarker} className={itemClass}>
+        <svg viewBox="0 0 24 24" className="h-4 w-4 shrink-0" fill="currentColor">
+          <path d="M12 2a7 7 0 0 0-7 7c0 5 7 13 7 13s7-8 7-13a7 7 0 0 0-7-7zm0 9.5A2.5 2.5 0 1 1 12 6.5a2.5 2.5 0 0 1 0 5z" />
+        </svg>
+        Add marker here
+      </button>
+      <a href={weatherUrl} target="_blank" rel="noopener noreferrer" onClick={onClose} className={itemClass}>
+        <svg
+          viewBox="0 0 24 24"
+          className="h-4 w-4 shrink-0"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        >
+          <path d="M7 18a4 4 0 1 1 .9-7.9A5.5 5.5 0 0 1 18.5 12a3.5 3.5 0 0 1-.5 6.5" />
+          <path d="M4 21h1M9 21h1M14 21h1" />
+        </svg>
+        NOAA forecast ↗
+      </a>
+    </div>
+  );
+}
+
 /** Custom-overlay defs whose source is actually present in the applied
  * style right now — mirrors the compositor's own skip condition exactly
  * (`!entry.visible || entry.opacity === 0`), since those are the only
@@ -350,6 +480,7 @@ export default function MapView() {
   const buildSeq = useRef(0);
   const prevOverlaySig = useRef<string>("");
   const [elevationM, setElevationM] = useState<number | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenuState | null>(null);
   const stack = useMapStore((s) => s.stack);
   const sentinel = useMapStore((s) => s.sentinel);
   const customOverlays = useMapStore((s) => s.customOverlays);
@@ -395,10 +526,22 @@ export default function MapView() {
         zoom: +map.getZoom().toFixed(2),
       });
     });
+    // A stale context menu floating over the wrong spot after a pan/zoom
+    // would be misleading (its coordinates/marker-placement no longer match
+    // what's under it) — "move" covers pan and zoom alike in maplibre.
+    map.on("movestart", () => setContextMenu(null));
 
     // --- Drawing interactions (read state via getState to avoid stale closures)
     const lngLat = (e: MapMouseEvent): LngLat => [e.lngLat.lng, e.lngLat.lat];
     let justDragged = false;
+
+    function openContextMenu(e: Pick<MapMouseEvent, "lngLat" | "point">) {
+      const rect = containerRef.current?.getBoundingClientRect();
+      const pos = rect
+        ? clampMenuPos(e.point.x, e.point.y, rect.width, rect.height)
+        : { x: e.point.x, y: e.point.y };
+      setContextMenu({ lngLat: e.lngLat, x: pos.x, y: pos.y });
+    }
 
     map.on("click", (e) => {
       const s = useMapStore.getState();
@@ -432,12 +575,13 @@ export default function MapView() {
     });
 
     // Right-click (desktop) / long-press (mobile, which has no native
-    // right-click) as a quick-access alternative to switching to the query
-    // tool — matches OSM.org's own right-click "Query features" gesture,
-    // the original inspiration for this feature. Only while the pointer
-    // tool is active, so it never fights drawing.
+    // right-click) opens a small context menu at that spot — coordinates
+    // (with copy), the OSM feature query direct right-click used to run,
+    // add-marker, and a NOAA forecast link. Inspired by OSM.org's own
+    // right-click "Query features" gesture. Only while the pointer tool is
+    // active, so it never fights drawing.
     map.on("contextmenu", (e) => {
-      if (useMapStore.getState().tool === "select") showOsmQueryPopup(map, e);
+      if (useMapStore.getState().tool === "select") openContextMenu(e);
     });
 
     const LONG_PRESS_MS = 500;
@@ -457,7 +601,7 @@ export default function MapView() {
       longPressTimer = setTimeout(() => {
         longPressTimer = null;
         justLongPressed = true;
-        showOsmQueryPopup(map, e);
+        openContextMenu(e);
       }, LONG_PRESS_MS);
     });
     map.on("touchmove", (e) => {
@@ -550,6 +694,7 @@ export default function MapView() {
       if (e.key === "Enter" && s.draft) {
         s.draftFinish();
       } else if (e.key === "Escape") {
+        setContextMenu(null);
         if (s.draft) s.draftCancel();
         else if (s.splitting) s.setSplitting(false);
         else if (s.tool !== "select") s.setTool("select");
@@ -660,7 +805,14 @@ export default function MapView() {
       <div ref={containerRef} className="h-full w-full" />
       {/* Mobile: vertical stack on the right, clear of the top corner
           dropdowns. sm: and up: horizontal, top-center (original layout). */}
-      <div className="absolute right-2 top-20 z-10 flex flex-col items-end gap-2 sm:left-1/2 sm:right-auto sm:top-2 sm:flex-row sm:items-start sm:-translate-x-1/2">
+      {/* z-20, not z-10 like the corner panels: at moderate desktop widths
+          (confirmed overlapping at 950px with a corner panel open and the
+          search box open) their reserved columns collide, since all three
+          float independently at top-2 (see ObjectsPanel.tsx's positioning
+          note). A higher z-index doesn't fix the geometry, but it keeps the
+          thing the user is actively typing into always on top and
+          clickable rather than partly hidden under a static panel. */}
+      <div className="absolute right-2 top-20 z-20 flex flex-col items-end gap-2 sm:left-1/2 sm:right-auto sm:top-2 sm:flex-row sm:items-start sm:-translate-x-1/2">
         <Toolbar />
         <SearchBox />
       </div>
@@ -669,6 +821,9 @@ export default function MapView() {
       <LayerPanel />
       <ProfilePanel obj={selectedObj} onClose={() => setSelected(null)} />
       <CustomOverlayData />
+      {contextMenu && mapRef.current && (
+        <ContextMenu map={mapRef.current} state={contextMenu} onClose={() => setContextMenu(null)} />
+      )}
       {elevationM !== null && (
         <div className="absolute bottom-8 left-2 z-10 rounded-md bg-white/95 px-2 py-1 text-xs tabular-nums text-gray-700 shadow">
           {metersToFeet(elevationM).toLocaleString()} ft

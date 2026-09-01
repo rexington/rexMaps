@@ -527,19 +527,36 @@ export default function ObjectsPanel() {
     "rounded-md bg-white px-2 py-1 text-xs font-medium text-gray-700 shadow-sm border border-gray-200 hover:border-emerald-600 hover:text-emerald-800 disabled:opacity-40";
 
   return (
-    <div className="absolute left-2 top-2 z-10 w-72 max-w-[calc(100vw-1rem)] select-none sm:top-14">
-      {/* sm:top-14, not top-2: on desktop this clears the centered
-          Toolbar/SearchBox row so an expanded panel can't overlap the map
-          tools; on mobile the toolbar moves off to the right instead, so
-          top-2 is free. */}
+    <div className="absolute left-2 top-2 z-10 w-72 max-w-[calc(100vw-1rem)] select-none">
+      {/* Was sm:top-14 on desktop (clearing the centered Toolbar/SearchBox
+          row, which used to collide with this at ~950px wide) — moved back
+          to top-2 per request. Tested at 700–1300px wide: the closed
+          hamburger button never reaches the centered row. Opening this
+          panel *and* LayerPanel *and* the search box at the same time at
+          ~950px does still geometrically overlap the search row (confirmed)
+          — fixed not by geometry but by giving that row z-20 (MapView.tsx)
+          so the thing being actively typed into always renders on top and
+          stays fully clickable, rather than getting partly covered by a
+          static panel. See docs/PLAN.md, 2026-09-01. */}
       <button
         onClick={() => setOpen((o) => !o)}
-        className="mb-1 rounded-md bg-white/95 px-3 py-1.5 text-sm font-semibold text-emerald-900 shadow"
+        title="Menu"
+        aria-label={open ? "Close menu" : "Open menu"}
+        aria-expanded={open}
+        className="mb-1 rounded-md bg-white/95 p-2 text-emerald-900 shadow hover:bg-white"
       >
-        rexMaps {open ? "▾" : "▸"}
+        {open ? (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M6 6l12 12M18 6L6 18" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="h-5 w-5" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+            <path d="M4 6h16M4 12h16M4 18h16" />
+          </svg>
+        )}
       </button>
       {open && (
-        <div className="max-h-[calc(100dvh-5rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur sm:max-h-[calc(100dvh-8rem)]">
+        <div className="max-h-[calc(100dvh-5rem)] space-y-3 overflow-y-auto rounded-lg bg-gray-50/95 p-2 shadow-lg backdrop-blur">
           <div className="flex items-center gap-1.5">
             <input
               value={currentMap.title}

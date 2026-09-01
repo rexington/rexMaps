@@ -52,7 +52,7 @@ const TOOLS: { tool: Tool; label: string; icon: React.ReactNode; key: string }[]
   },
   {
     tool: "query",
-    label: "Query features (what's here?) — or right-click/long-press anytime in Select",
+    label: "Query features (what's here?) — or right-click/long-press anytime in Select for a menu with more options",
     key: "query",
     // Info-circle glyph — deliberately not another magnifying glass, which
     // is already SearchBox's icon (Rex flagged the collision).
@@ -175,7 +175,7 @@ export function DrawHint() {
     text = "Click the map to place markers · Esc to finish";
   } else if (tool === "query") {
     text =
-      "Click the map to see what OpenStreetMap knows about that spot · Esc to finish · tip: right-click (or long-press) does this from Select too";
+      "Click the map to see what OpenStreetMap knows about that spot · Esc to finish · tip: right-click (or long-press) from Select opens a menu with this plus more";
   } else {
     // Committed legs + the cursor segment (routed preview when available).
     const committed = draft ? legsToCoords(draft.legs) : [];

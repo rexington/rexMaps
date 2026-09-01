@@ -311,8 +311,9 @@ didn't fit, and double-click/Enter to finish a line is impractical on touch.
   corner buttons (mobile default: `right-2 top-20 flex-col`) and reverts to
   the original horizontal top-center layout at `sm:` (640px) and up — freeing
   `top-2` for the ObjectsPanel/LayerPanel dropdowns on mobile, which no longer
-  need the `top-14` offset added earlier this stage (that offset is now
-  `sm:top-14`-only, still needed on desktop where the toolbar stays top-center).
+  need the `top-14` offset added earlier this stage (that offset was later
+  `sm:top-14`-only on desktop where the toolbar stays top-center; moved back
+  to `top-2` on both per a 2026-09-01 request — see that write-up).
 - Both dropdowns **default closed** on load (`useState(false)`, was `true`) —
   a general preference, not mobile-specific.
 - **DrawHint** repositioned to the bottom on mobile (`bottom-6`, was
@@ -1101,6 +1102,65 @@ despite a successful `wrangler deploy`, this is the first thing to check —
 and the fix would be a dashboard cache purge (this session's wrangler
 token has no `cache_purge` scope), not more code changes.
 
+### Right-click context menu; top bar moved back up; hamburger icon (done 2026-09-01)
+Three requests. **Context menu**: right-click/long-press in the Select tool
+used to run the OSM query directly (see "Tracestrack Topo layer + OSM 'query
+features'" above). It now opens a small menu instead (`ContextMenu`,
+`MapView.tsx`) with four actions: copy coordinates (clipboard, falling back
+to `prompt()` on failure — same pattern as the share-link copy button in
+`ObjectsPanel.tsx`), the same OSM query as before, add a marker at that
+exact spot, and a NOAA forecast link
+(`forecast.weather.gov/MapClick.php?lat=&lon=&site=all&smap=1`). Long-press
+was unified onto the same menu — it's documented in this codebase as the
+mobile equivalent of right-click, and coordinates/marker/weather are at
+least as useful with no mouse.
+
+Menu position comes straight from the mouse/touch event's `point` (screen
+pixels relative to the map container, already the same coordinate space the
+absolutely-positioned overlay divs use — no conversion needed), clamped so
+it can't render off-screen near an edge. It closes on a capturing-phase
+`document` `pointerdown` outside its own node, on `Escape`, and on
+`movestart` (any pan/zoom — a stale menu floating over the wrong spot after
+the map moves would be misleading). The pointerdown-outside-closes approach
+initially looked risky for the long-press path — would the same gesture's
+own touch immediately close the menu it just opened? No: the real
+`pointerdown` for that touch already fired *before* the 500ms long-press
+timer completes and the menu even mounts its listener; only legacy
+mouse-compatibility events (`click`) get synthesized afterward, not a second
+`pointerdown`, and that synthetic click was already handled by the existing
+`justLongPressed` guard. Confirmed by CDP `Input.dispatchTouchEvent` (a hold
+past 500ms opens the menu with no accidental marker/selection from the
+synthetic click after; a short tap under 500ms doesn't open it) — closing
+the "I'll try it on my phone later" gap from the query-tool work, since this
+is the first time that gesture got machine-tested rather than only
+hand-tested.
+
+**Top bar**: `ObjectsPanel`/`LayerPanel` moved from `sm:top-14` back to
+`top-2` on desktop per request (see the "Top bar overlap fix" decision-log
+entry this supersedes) — `top-14` was clearing a real collision with the
+centered Toolbar/SearchBox row at ~950px wide, so this reopens that risk at
+that width. **ObjectsPanel's toggle is now a hamburger icon** (☰ closed, ✕
+open) instead of the "rexMaps ▾" text button — narrower, so on its own it no
+longer reaches the centered row even at 700px wide (tested 700–1300px:
+closed buttons clear on both sides). But opening *both* corner panels *and*
+the search box at the same time at ~950px does still geometrically overlap
+(confirmed via CDP: the search row measured x 451–707, LayerPanel's expanded
+content measured x 654–942 — a real ~50px collision, same underlying cause
+as the original bug, just needing more simultaneous state to trigger since
+the hamburger icon closed the easy way in). Rather than re-litigate the
+`top-2` ask, fixed by giving the Toolbar/SearchBox row `z-20` (was `z-10`,
+same as the corner panels) in `MapView.tsx` — this doesn't change the
+geometry, but a positive z-index lifts that row's *entire* subtree (input
+row and, by the same CSS stacking-context rule, its results dropdown too)
+above the corner panels, so the thing being actively typed into always
+renders on top and stays clickable rather than partly hidden under a static
+panel; confirmed via CDP that the search input renders over the layer
+panel's corner rather than under it. The corner panel itself just has a
+small area briefly covered while search is open, at this one narrow-desktop
+width, with both corner panels expanded, simultaneously — the max-height
+scroll caps left over from the old top-14 layout (`sm:max-h-...-8rem`) were
+also simplified away since both breakpoints share the same top offset now.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These
@@ -1148,7 +1208,8 @@ data-sourcing/research risk, or multiple sessions.
 - **2026-08-25** Stage 5: deployed to `https://rexmaps.ke6mt.workers.dev`. Cloudflare Access deliberately left as a manual dashboard step rather than API-automated — the session's wrangler token has no Access scope, and a change to the auth boundary in front of a live app is exactly the kind of action to leave to the user rather than script.
 - **2026-08-25** Custom domain `maps.ke6mt.us` added (Rex's existing zone) and confirmed working. Access plan revised: use **worker-level Access** (Workers & Pages → Access tab → "Protect this Worker behind Access"), a feature that shipped 2026-08-14 — it covers the custom domain *and* the `workers.dev` fallback from one Worker-scoped Access app, so there's no separate "protect two hostnames or disable one" step. Confirmed against current developers.cloudflare.com docs, not prior knowledge (docs had recently moved to `access-controls/applications/http-apps/...`). Caveat recorded: it 403s on WebSocket upgrades, relevant if the backlog's live-location-sharing idea ever ships.
 - **2026-08-25** Access configured and live: policy allows the `vokey.org` email domain (not a single address) — deliberate, Rex is fine with family members having access. **Stage 5 complete.** Google as a second IdP (for friends outside the family domain) backlogged, confirmed against current docs: needs a Google Cloud Console OAuth client, works with personal Gmail.
-- **2026-08-25** Top bar overlap fix: `ObjectsPanel` and `LayerPanel` were both anchored `top-2` like the centered Toolbar/SearchBox row, so at moderate window widths (confirmed overlapping by ~950px wide with the search box open) the corner panels' expanded content visually collided with the map tools. Fixed by moving both corner panels to `top-14`, clearing the tools row entirely regardless of viewport width, rather than a full flex/grid rewrite of the four independently-absolutely-positioned top overlays. `max-h-[calc(100dvh-Xrem)]` scroll caps adjusted from 5rem to 8rem to preserve the same bottom clearance.
+- **2026-08-25** Top bar overlap fix: `ObjectsPanel` and `LayerPanel` were both anchored `top-2` like the centered Toolbar/SearchBox row, so at moderate window widths (confirmed overlapping by ~950px wide with the search box open) the corner panels' expanded content visually collided with the map tools. Fixed by moving both corner panels to `top-14`, clearing the tools row entirely regardless of viewport width, rather than a full flex/grid rewrite of the four independently-absolutely-positioned top overlays. `max-h-[calc(100dvh-Xrem)]` scroll caps adjusted from 5rem to 8rem to preserve the same bottom clearance. **Superseded 2026-09-01**: moved back to `top-2` per request; the residual collision (now needing both corner panels *and* search open at once to trigger) is handled with a z-index instead — see that write-up.
 - **2026-08-27** Account/ownership architecture: chose **private per person** over a shared pool for anything new (Rex, deliberately — "like CalTopo," an inaccessible layer just doesn't show). Built the identity-verification foundation (`src/lib/access.ts` — verifies the Access JWT, not the authenticated-user-email header) and applied it to custom overlays first, since that gap was concrete and already found (localStorage-only, invisible on a second device). `maps` stays a shared pool for now; retrofitting ownership onto it is backlog #16, not bundled into this pass. Longer roadmap (2nd IdP, layer/overlay toggle, no-auth sharing, mobile-native) captured as backlog #2/#17/#18/#19.
 - **2026-08-28** Auth reversed: **Cloudflare Access replaced by in-app auth** (Google OIDC + D1 sessions). Started as a request to design backlog #18 (public map share links); researching the mechanism (a path-scoped Access Bypass Application, verified against current Cloudflare docs — more-specific-path rules win over worker-level Access) surfaced real friction Rex then named directly: Access is an all-or-nothing edge switch, expressing "this one map is public" as path gymnastics plus manual per-surface dashboard config was the wrong shape, and it has no route to self-serve signup at all. See "In-app auth" write-up below for what shipped and what's still open (Access itself isn't off yet).
 - **2026-08-24** Stage 4: Sentinel imagery via **CDSE Sentinel Hub WMTS** (user created a CDSE account; 10 m beats GIBS HLS's 30 m; free tier 10k req/mo). Slope shading is computed client-side through a MapLibre custom protocol rather than pre-rendered tiles — zero hosting cost, works offline once DEM tiles are cached, and reuses the Terrarium pipeline from elevation profiles. Nominatim search is Enter-only to respect their no-autocomplete policy. Line hit-testing got a ±4 px box (user feedback: thin lines were hard to click); object rename input got an explicit white background (was transparent over the panel).
+- **2026-09-01** Right-click/long-press now opens a context menu (coordinates+copy, query, add marker, NOAA forecast) instead of running the query directly; long-press unified onto the same menu, and this time the gesture itself got CDP-verified rather than left to Rex's own phone test. Top-bar corner panels moved back to `top-2` on desktop per request; ObjectsPanel's toggle became a hamburger icon. Moving the panels back reopens the narrow-desktop collision the `top-14` fix existed for (now needing both panels *and* search open at ~950px, confirmed via CDP) — fixed with a z-index bump on the toolbar/search row rather than re-litigating the `top-2` ask. See write-up above for full detail.
