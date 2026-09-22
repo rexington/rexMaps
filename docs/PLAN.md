@@ -1161,6 +1161,172 @@ width, with both corner panels expanded, simultaneously — the max-height
 scroll caps left over from the old top-14 layout (`sm:max-h-...-8rem`) were
 also simplified away since both breakpoints share the same top offset now.
 
+### Offline auth-gate bug: remembered identity for offline sign-in checks (done 2026-09-22)
+Rex reported the real-world failure this whole offline stage exists to
+prevent: he'd downloaded an offline pack and been signed in recently, but
+hit the sign-in screen out of cell range. Root cause was in the
+2026-08-28 auth migration, not Stage 6 — `AuthGate` renders the app only
+once `authUser` is populated, and `authUser` came exclusively from a live
+`fetch("/api/auth/me")` on every mount (`authClient.ts`'s old
+`fetchCurrentUser()`). `/api/auth/me` always 200s with `{user}` when
+reachable (`src/app/api/auth/me/route.ts` has no other response path), so
+that fetch throwing only ever means "network unreachable" — but the old
+code caught the throw and returned `null`, identical to an authoritative
+"no session." Offline read as signed-out every time, even with a
+perfectly valid session cookie, because the *check* needs network even
+though the cached shell/tiles/local drawing don't.
+
+Fixed by making the check three-state (`checkSession()` in
+`authClient.ts`: `signed-in` / `signed-out` / `offline`) instead of
+collapsing to a boolean. A new persisted `lastKnownAuthUser` field
+(`mapStore.ts`, added to `partialize` — first auth-related field to be
+persisted; `authUser` itself stays unpersisted, rechecked live every load)
+is only ever written by an authoritative `signed-in`/`signed-out` result
+or an explicit sign-out, never by an `offline` one. `loadAuthUser()`'s
+offline branch falls back to whatever was last confirmed instead of
+clearing it. Explicitly **not** given a TTL against `SESSION_TTL_DAYS` —
+a stale remembered identity self-corrects the moment any `/api/*` call
+runs for real (401s, same as always), so an expiry check here would only
+be validating a scenario that already resolves itself.
+
+**Security framing, checked deliberately given this loosens a gate**: this
+is a client-side render hint only — every route still calls
+`sessionUser()` and 401s regardless of what `lastKnownAuthUser` holds.
+Someone holding the device offline gains the shell, locally-persisted
+objects, and already-downloaded tiles — all of which were already sitting
+in localStorage/Cache Storage unconditionally, gate or no gate. No server
+data becomes reachable and no write becomes possible that wasn't before.
+
+Verified the three-state split rather than just "offline now works" (the
+failure mode of a two-state fix in disguise is "always let everyone in"):
+built for production (`NODE_ENV=production`, SW only registers then),
+loaded once online to populate `lastKnownAuthUser` and the shell cache,
+then cut network via CDP and hard-reloaded — app rendered normally. Also
+checked the negative cases: clearing `lastKnownAuthUser` first and
+reloading offline still shows the sign-in screen (no remembered identity
+to fall back to); and signing out (or an explicit 401) online clears
+`lastKnownAuthUser` immediately, not just `authUser`, so a subsequent
+offline load doesn't resurrect a session that was just deliberately ended.
+
+**Follow-up (same day)**: the adjacent papercut above — raw `alert()`
+error text from any of the saved-map actions (list/save/load/delete/
+share) when offline — got cleaned up too, since Rex hit it right after.
+`describeApiError()` in `ObjectsPanel.tsx` tells a network-layer failure
+(fetch itself throwing — a `TypeError`, the offline case) apart from an
+HTTP error response (the plain `Error` `api()` in `savedMaps.ts` throws
+for a non-ok status) and gives the offline case its own copy ("you're
+offline — this needs a connection; the map you already have open still
+works fine") instead of surfacing "Failed to fetch" verbatim. Import
+failures are untouched — that's local file parsing, not a network call.
+
+Worth being clear about scope here, since Rex asked directly: **the saved-
+maps list itself is not available offline**, and this pass doesn't change
+that — `listMaps()`/`getMap()` are always live `/api/maps` fetches, never
+cached or persisted, so browsing or switching to a different saved map
+still needs connectivity. What *does* survive offline (via zustand's
+existing localStorage persist, unrelated to this fix) is whatever single
+map was already loaded/open — its `objects`/`stack`/`viewport` — plus any
+downloaded offline tile packs (Stage 6b). A true offline saved-maps cache
+would be a real feature (mirroring the list into IndexedDB/localStorage,
+deciding a staleness/conflict story for edits made offline) — not
+attempted here; flag as backlog if it's actually wanted.
+
+### Offline saved-maps: local cache + per-object merge on reconnect (done 2026-09-22)
+Direct follow-on to the auth-gate fix above — closing the gap Rex actually
+hit (needing a *different* saved map than whatever was already open, out of
+cell range). The naive fix (cache the list/bodies, blind-overwrite `PUT` on
+reconnect) has a real cost for a shared family pool: today's `PUT` replaces
+the whole `data` JSON blob, so whoever reconnects last silently clobbers
+anything anyone else changed while offline. Rex's own framing was the actual
+design insight: two people editing the *same drawn object* while one's
+offline should be rare, so the merge doesn't need to be blob-level — every
+`MapObject` already carries a stable `id` (`crypto.randomUUID()`,
+`objects.ts`), so a **per-object three-way merge** (base = last-synced
+snapshot, mine = local edits, theirs = current server state) resolves
+add/edit/delete on *different* objects with zero ambiguity, and only needs a
+tie-breaker for the rare same-object case.
+
+Tie-breakers, confirmed with Rex before writing any code (real calls about
+shared family data, not obvious defaults): **an edit beats a delete**,
+symmetrically; **on a genuine same-object double-edit, the offline device
+doing the sync wins** (avoids trusting cross-device clocks for recency —
+deliberately no per-object timestamp was added to `MapObject` for this
+reason); `stack`/`viewport` are **never merged**, always taking the local
+device's copy (camera position/layer toggles are "what I'm looking at," not
+shared content); and **no automatic retry-on-reconnect** for v1 — a failed
+save while offline just leaves `dirty: true`, same as always, so "come back
+to signal, hit Save" is the whole flow rather than a background listener
+that could fire silently. Full design/tie-breaker rationale and the approved
+plan: `~/.claude/plans/glimmering-seeking-orbit.md`.
+
+**`src/lib/mapMerge.ts`** (new, pure, no I/O): `mergeObjects(base, mine,
+theirs)` diffs three `MapObject[]` by id into added/edited/deleted relative
+to base on each side independently, then resolves per id (only-one-side-
+changed → that side; both deleted → stays deleted; delete-vs-edit → edit
+wins; genuine double-edit → mine wins, counted in `conflicts`).
+`mergeSavedMapData` wraps it for a full `SavedMapData`, passing `stack`/
+`viewport` through from `mine` untouched.
+
+**`src/lib/offlineMapsCache.ts`** (new): plain-localStorage read-through
+cache (matches the Stage 6b "no new persistence tech" precedent) — the
+maps list, and up to the 20 most-recently-opened map bodies (LRU-evicted,
+since bodies share the same-origin quota the zustand-persist store already
+uses). **The one invariant the whole merge rests on**: a cached body (the
+merge "base" for that id next time) is written *only* right after a
+successful live fetch or a successful merged save — never from an offline
+load, or the next merge would see base == mine and silently miss real
+offline edits.
+
+**Wiring (`ObjectsPanel.tsx`)**: `handleOpenList`/`handleLoad` try the live
+fetch first, falling back to the cache only on a `TypeError` (network
+failure — an HTTP error still surfaces the existing error path) with a
+small "offline — showing last synced list" note rather than a blind
+fallback. Manual Save and autosave now share one `saveMap()` — a brand-new
+map still just creates; updating an existing map fetches `theirs` live,
+merges against the cached base (falling back to `theirs` itself as base if
+this device never went offline with this map), `PUT`s the merged result,
+advances the cache, and pushes the merged objects back into the live store
+(`applyMergedObjects`, a new store action deliberately *not* built on
+`loadMap` — it doesn't reset `selectedId`/`tool`/`draft`, since this fires
+mid-session right after a Save, not a fresh map open) so Rex immediately
+sees whatever a family member added while he was out. Unifying autosave
+onto the same merge path (rather than leaving it a blind `PUT`) was a
+deliberate call, not an oversight — autosave is the one save path with no
+user watching it fire, exactly where a silently-dropped conflict would go
+unnoticed; a merge conflict is a *successful* save though, not a failure,
+so it still gets the same visible one-line notice ("Synced — 1 item had a
+conflicting edit made elsewhere; yours was kept") regardless of which path
+triggered it, while autosave's actual failure path (still offline) stays
+silent (`console.warn`) exactly as before.
+
+**Verified two ways, deliberately not by CDP this time**: this app's
+session cookie is `HttpOnly; Secure` (`src/lib/auth.ts`), and there's no
+dev-auth-bypass anymore (removed on purpose during the Access→in-app-auth
+migration — see that write-up) — so a real browser session can't be
+obtained locally without either Rex's actual Google login or reintroducing
+a bypass hatch the project deliberately removed; neither was done. Instead:
+(1) `mergeObjects` exercised directly, in isolation, against a synthetic
+base/mine/theirs covering every case in the design (untouched, add-only-
+mine, add-only-theirs, delete-only-each-side, edit-only-each-side, edit-
+beats-delete both directions, genuine double-edit, delete-by-both) — all
+correct, conflict count exactly right. (2) The exact call sequence
+`saveMap()` makes — `getMap`/`cacheMapBody`/`getCachedMapBody`/
+`mergeSavedMapData`/`updateMap`/`applyMergedObjects`/`markSaved`, all the
+real imported functions, none reimplemented — run against an in-memory
+fetch mock standing in for D1 (a direct mutation of the mock's server-side
+state between calls stands in for `wrangler d1 execute`, i.e. a change the
+client genuinely never sees), covering the same scenarios end-to-end:
+independent edits both survive a save, edit-beats-delete fires correctly
+in both directions, a genuine double-edit is detected and mine wins with
+`conflicts === 1`, and an offline `getMap` throws while the previously
+cached body remains available for the load fallback. Both scripts pass in
+full; production build/typecheck/lint all clean. **Not independently
+verified**: the actual React/JSX wiring in the browser (the `handleSave`/
+`handleOpenList`/`handleLoad` glue calling these functions in this order) —
+worth Rex trying for real once (load a map online, go offline, edit,
+reconnect, Save) before trusting this in the field the way the auth-gate
+fix above already has been.
+
 ## Backlog / ideas
 
 Ordered by rough lift, cheapest first, so it's easy to pick a next few. These
@@ -1212,4 +1378,6 @@ data-sourcing/research risk, or multiple sessions.
 - **2026-08-27** Account/ownership architecture: chose **private per person** over a shared pool for anything new (Rex, deliberately — "like CalTopo," an inaccessible layer just doesn't show). Built the identity-verification foundation (`src/lib/access.ts` — verifies the Access JWT, not the authenticated-user-email header) and applied it to custom overlays first, since that gap was concrete and already found (localStorage-only, invisible on a second device). `maps` stays a shared pool for now; retrofitting ownership onto it is backlog #16, not bundled into this pass. Longer roadmap (2nd IdP, layer/overlay toggle, no-auth sharing, mobile-native) captured as backlog #2/#17/#18/#19.
 - **2026-08-28** Auth reversed: **Cloudflare Access replaced by in-app auth** (Google OIDC + D1 sessions). Started as a request to design backlog #18 (public map share links); researching the mechanism (a path-scoped Access Bypass Application, verified against current Cloudflare docs — more-specific-path rules win over worker-level Access) surfaced real friction Rex then named directly: Access is an all-or-nothing edge switch, expressing "this one map is public" as path gymnastics plus manual per-surface dashboard config was the wrong shape, and it has no route to self-serve signup at all. See "In-app auth" write-up below for what shipped and what's still open (Access itself isn't off yet).
 - **2026-08-24** Stage 4: Sentinel imagery via **CDSE Sentinel Hub WMTS** (user created a CDSE account; 10 m beats GIBS HLS's 30 m; free tier 10k req/mo). Slope shading is computed client-side through a MapLibre custom protocol rather than pre-rendered tiles — zero hosting cost, works offline once DEM tiles are cached, and reuses the Terrarium pipeline from elevation profiles. Nominatim search is Enter-only to respect their no-autocomplete policy. Line hit-testing got a ±4 px box (user feedback: thin lines were hard to click); object rename input got an explicit white background (was transparent over the panel).
+- **2026-09-22** Offline saved-maps sync: per-object three-way merge (`src/lib/mapMerge.ts`) on save, base/mine/theirs keyed by `MapObject.id`, rather than the whole-blob last-write-wins `PUT` already in place. Tie-breakers (edit beats delete; mine wins on a genuine same-object double-edit; stack/viewport never merged; no auto-retry-on-reconnect for v1) confirmed with Rex first — see write-up above and `~/.claude/plans/glimmering-seeking-orbit.md`. No D1/schema changes; the merge is entirely client-side.
+- **2026-09-22** Offline auth-gate bug fixed: the 2026-08-28 auth migration's `AuthGate` relied on a live `/api/auth/me` fetch to populate `authUser` on every load, so losing connectivity read identically to being signed out — the exact regression the offline stage exists to avoid. Fixed with a three-state session check (`signed-in`/`signed-out`/`offline`) and a persisted `lastKnownAuthUser` fallback, written only on authoritative results; still a render hint only, every route still calls `sessionUser()` server-side. See write-up above.
 - **2026-09-01** Right-click/long-press now opens a context menu (coordinates+copy, query, add marker, NOAA forecast) instead of running the query directly; long-press unified onto the same menu, and this time the gesture itself got CDP-verified rather than left to Rex's own phone test. Top-bar corner panels moved back to `top-2` on desktop per request; ObjectsPanel's toggle became a hamburger icon. Moving the panels back reopens the narrow-desktop collision the `top-14` fix existed for (now needing both panels *and* search open at ~950px, confirmed via CDP) — fixed with a z-index bump on the toolbar/search row rather than re-litigating the `top-2` ask. See write-up above for full detail.

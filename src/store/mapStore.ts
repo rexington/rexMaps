@@ -17,7 +17,7 @@ import {
   listCustomOverlays,
   type CustomOverlayInput,
 } from "@/lib/customOverlaysApi";
-import { fetchCurrentUser, signOut as signOutRequest, type SessionUser } from "@/lib/authClient";
+import { checkSession, signOut as signOutRequest, type SessionUser } from "@/lib/authClient";
 
 export interface Viewport {
   lng: number;
@@ -94,10 +94,18 @@ interface MapStore {
   removeOfflinePack: (id: string) => void;
   clearOfflinePacks: () => void;
 
-  // Sign-in state (see src/lib/auth.ts / authClient.ts). Not persisted —
-  // rechecked on every load via loadAuthUser(), since the source of truth is
-  // the session cookie, not anything the client should cache across visits.
+  // Sign-in state (see src/lib/auth.ts / authClient.ts). `authUser` itself is
+  // rechecked on every load via loadAuthUser() and not persisted, since the
+  // source of truth is the session cookie. `lastKnownAuthUser` IS persisted
+  // (see partialize below) as an offline fallback: the /api/auth/me check
+  // needs network, but the rest of the app (cached shell, downloaded tiles,
+  // local drawing) doesn't — without a remembered identity, losing
+  // connectivity looked identical to being signed out and bounced the user
+  // to the sign-in screen in the field. It's a render hint only, never
+  // trusted server-side: every API route still calls sessionUser() and 401s
+  // regardless of what this holds.
   authUser: SessionUser | null;
+  lastKnownAuthUser: SessionUser | null;
   /** True once the initial /api/auth/me check has resolved — lets AuthGate
    * distinguish "still checking" from "genuinely signed out". */
   authChecked: boolean;
@@ -173,6 +181,12 @@ interface MapStore {
     data: { objects: MapObject[]; stack: ActiveLayer[]; viewport: Viewport },
   ) => void;
   markSaved: (id: string) => void;
+  /** Replaces `objects` with a server-merged result (see mapMerge.ts) after
+   * a save reconciles offline edits against changes made elsewhere.
+   * Deliberately doesn't touch selectedId/tool/draft the way loadMap does —
+   * this fires mid-session, right after a Save the user is still actively
+   * working through, not a fresh map load. */
+  applyMergedObjects: (objects: MapObject[]) => void;
 }
 
 const DEFAULT_STACK: ActiveLayer[] = [
@@ -212,6 +226,7 @@ export const useMapStore = create<MapStore>()(
       autosaveEnabled: false,
       offlinePacks: [],
       authUser: null,
+      lastKnownAuthUser: null,
       authChecked: false,
       customOverlays: [],
       customOverlaysLoaded: false,
@@ -422,6 +437,8 @@ export const useMapStore = create<MapStore>()(
 
       markSaved: (id) =>
         set((s) => ({ currentMap: { ...s.currentMap, id }, dirty: false })),
+
+      applyMergedObjects: (objects) => set({ objects }),
     }),
     {
       name: "rexmaps-state",
@@ -436,6 +453,7 @@ export const useMapStore = create<MapStore>()(
         dirty: s.dirty,
         autosaveEnabled: s.autosaveEnabled,
         offlinePacks: s.offlinePacks,
+        lastKnownAuthUser: s.lastKnownAuthUser,
       }),
       migrate: (persisted) => persisted as MapStore,
     },
@@ -699,16 +717,31 @@ export function splitObjectAtVertex(id: string, idx: number) {
 }
 
 /** Checks the session cookie against the server. Called once from AuthGate
- * on mount — the only way authUser gets populated, since sign-in state is
- * deliberately never persisted locally. */
+ * on mount. Three outcomes, not two: a reachable server is authoritative
+ * (signed in or out, and either way updates the remembered identity used
+ * offline); an unreachable one falls back to whatever identity was last
+ * confirmed, rather than reading "no network" as "signed out". */
 export async function loadAuthUser() {
-  const user = await fetchCurrentUser();
-  useMapStore.setState({ authUser: user, authChecked: true });
+  const result = await checkSession();
+  if (result.status === "signed-in") {
+    useMapStore.setState({
+      authUser: result.user,
+      lastKnownAuthUser: result.user,
+      authChecked: true,
+    });
+  } else if (result.status === "signed-out") {
+    useMapStore.setState({ authUser: null, lastKnownAuthUser: null, authChecked: true });
+  } else {
+    useMapStore.setState({
+      authUser: useMapStore.getState().lastKnownAuthUser,
+      authChecked: true,
+    });
+  }
 }
 
 export async function signOutAndClear() {
   await signOutRequest();
-  useMapStore.setState({ authUser: null });
+  useMapStore.setState({ authUser: null, lastKnownAuthUser: null });
 }
 
 /** Fetches this account's custom overlays from the server. Called once from

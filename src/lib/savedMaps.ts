@@ -54,7 +54,7 @@ export const createMap = (title: string, data: SavedMapData) =>
   });
 
 export const getMap = (id: string) =>
-  api<{ id: string; title: string; data: SavedMapData }>(`/api/maps/${id}`);
+  api<{ id: string; title: string; data: SavedMapData; is_public: number }>(`/api/maps/${id}`);
 
 export const updateMap = (id: string, title: string, data: SavedMapData) =>
   api<{ ok: true }>(`/api/maps/${id}`, {

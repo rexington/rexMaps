@@ -19,6 +19,13 @@ import {
   objectLength,
   type MapObject,
 } from "@/lib/objects";
+import { mergeSavedMapData } from "@/lib/mapMerge";
+import {
+  cacheMapBody,
+  cacheMapsList,
+  getCachedMapBody,
+  getCachedMapsList,
+} from "@/lib/offlineMapsCache";
 import { simplifyPath } from "@/lib/simplify";
 import {
   createMap,
@@ -38,6 +45,22 @@ function download(filename: string, mime: string, content: string) {
   a.download = filename;
   a.click();
   URL.revokeObjectURL(url);
+}
+
+/**
+ * A network-layer failure (fetch itself throwing) is a TypeError; an HTTP
+ * error response is the plain Error api() in savedMaps.ts throws instead —
+ * worth telling apart, since "you're offline" is a different, more
+ * actionable message than "the server rejected this." (The list/load paths
+ * below have their own offline fallback via offlineMapsCache.ts and don't
+ * reach this helper in the offline case — this is for the failures that
+ * genuinely have no local fallback: save, delete, sharing.)
+ */
+function describeApiError(action: string, err: unknown): string {
+  if (err instanceof TypeError) {
+    return `${action} — you're offline. This needs a connection; the map you already have open still works fine.`;
+  }
+  return `${action}: ${err instanceof Error ? err.message : String(err)}`;
 }
 
 function slug(title: string) {
@@ -388,7 +411,7 @@ export default function ObjectsPanel() {
   const authUser = useMapStore((s) => s.authUser);
   const autosaveEnabled = useMapStore((s) => s.autosaveEnabled);
   const setAutosaveEnabled = useMapStore((s) => s.setAutosaveEnabled);
-  const { setTitle, newMap, loadMap, markSaved, importObjects } = useMapStore();
+  const { setTitle, newMap, loadMap, markSaved, importObjects, applyMergedObjects } = useMapStore();
 
   async function handleSignOut() {
     if (dirty && !confirm("Discard unsaved changes?")) return;
@@ -397,28 +420,69 @@ export default function ObjectsPanel() {
 
   const [open, setOpen] = useState(false);
   const [savedList, setSavedList] = useState<SavedMapSummary[] | null>(null);
+  const [listIsOffline, setListIsOffline] = useState(false);
+  const [syncNotice, setSyncNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
-  const snapshot = () => {
+  function showSyncNotice(conflicts: number) {
+    setSyncNotice(
+      conflicts === 1
+        ? "Synced — 1 item had a conflicting edit made elsewhere; yours was kept."
+        : `Synced — ${conflicts} items had conflicting edits made elsewhere; yours were kept.`,
+    );
+    setTimeout(() => setSyncNotice(null), 8000);
+  }
+
+  /**
+   * Shared by the manual Save button and autosave. Reads fresh state at
+   * call time (not a render closure) since autosave already needed that and
+   * unifying the two save paths keeps there from being two save
+   * implementations to keep in sync.
+   *
+   * For a brand-new map, just creates it. For an update, does a three-way
+   * merge (mapMerge.ts) before saving: `base` is the last-synced snapshot
+   * cached locally (offlineMapsCache.ts) when this map was last loaded or
+   * saved, `mine` is this device's current objects/stack/viewport, `theirs`
+   * is whatever the server holds right now — so an offline edit reconciles
+   * with anything changed elsewhere instead of blindly overwriting it (the
+   * old behavior, still what a brand-new map effectively gets since there's
+   * nothing to merge against yet). Throws on failure, including offline —
+   * callers decide whether that's alert-worthy or silent.
+   */
+  async function saveMap(): Promise<{ conflicts: number }> {
     const s = useMapStore.getState();
-    return { objects: s.objects, stack: s.stack, viewport: s.viewport };
-  };
+    const title = s.currentMap.title.trim() || "Untitled map";
+    const mine = { objects: s.objects, stack: s.stack, viewport: s.viewport };
+
+    if (!s.currentMap.id) {
+      const { id } = await createMap(title, mine);
+      cacheMapBody(id, title, mine, 0);
+      markSaved(id);
+      return { conflicts: 0 };
+    }
+
+    const id = s.currentMap.id;
+    const theirs = await getMap(id); // throws (TypeError) if offline
+    const cachedBase = getCachedMapBody(id);
+    const base = cachedBase ? cachedBase.data : theirs.data;
+    const { data: merged, conflicts } = mergeSavedMapData(base, mine, theirs.data);
+
+    await updateMap(id, title, merged);
+    cacheMapBody(id, title, merged, theirs.is_public);
+    applyMergedObjects(merged.objects);
+    markSaved(id);
+    return { conflicts };
+  }
 
   async function handleSave() {
     setBusy(true);
     try {
-      const title = currentMap.title.trim() || "Untitled map";
-      if (currentMap.id) {
-        await updateMap(currentMap.id, title, snapshot());
-        markSaved(currentMap.id);
-      } else {
-        const { id } = await createMap(title, snapshot());
-        markSaved(id);
-      }
+      const { conflicts } = await saveMap();
       setSavedList(null);
+      if (conflicts > 0) showSyncNotice(conflicts);
     } catch (err) {
-      alert(`Save failed: ${err instanceof Error ? err.message : err}`);
+      alert(describeApiError("Save failed", err));
     } finally {
       setBusy(false);
     }
@@ -426,28 +490,19 @@ export default function ObjectsPanel() {
 
   const AUTOSAVE_DEBOUNCE_MS = 3000;
   // Off by default (a checkbox, not a silent behavior change). Fires once
-  // ~3s after an edit makes the map dirty — reads fresh state at fire time
-  // rather than closing over this render's currentMap/objects, since more
-  // edits during the debounce window shouldn't get lost to a stale
-  // snapshot. Silent on failure (console only): an autosave shouldn't
-  // interrupt whatever the user's doing with an alert() the way a manual
-  // Save click's failure should.
+  // ~3s after an edit makes the map dirty. Silent on failure (console
+  // only): an autosave shouldn't interrupt whatever the user's doing with
+  // an alert() the way a manual Save click's failure should — but a real
+  // merge conflict is a *successful* save, not a failure, so it still gets
+  // the same visible notice a manual Save's conflict would.
   useEffect(() => {
     if (!autosaveEnabled || !dirty) return;
     const t = setTimeout(async () => {
-      const s = useMapStore.getState();
-      if (!s.dirty) return; // saved via the manual button meanwhile
-      const title = s.currentMap.title.trim() || "Untitled map";
-      const snap = { objects: s.objects, stack: s.stack, viewport: s.viewport };
+      if (!useMapStore.getState().dirty) return; // saved via the manual button meanwhile
       try {
-        if (s.currentMap.id) {
-          await updateMap(s.currentMap.id, title, snap);
-          markSaved(s.currentMap.id);
-        } else {
-          const { id } = await createMap(title, snap);
-          markSaved(id);
-        }
+        const { conflicts } = await saveMap();
         setSavedList(null);
+        if (conflicts > 0) showSyncNotice(conflicts);
       } catch (err) {
         console.warn("Autosave failed", err);
       }
@@ -463,9 +518,18 @@ export default function ObjectsPanel() {
     }
     setBusy(true);
     try {
-      setSavedList(await listMaps());
+      const list = await listMaps();
+      cacheMapsList(list);
+      setListIsOffline(false);
+      setSavedList(list);
     } catch (err) {
-      alert(`Couldn't list maps: ${err instanceof Error ? err.message : err}`);
+      const cached = err instanceof TypeError ? getCachedMapsList() : null;
+      if (cached) {
+        setListIsOffline(true);
+        setSavedList(cached);
+      } else {
+        alert(describeApiError("Couldn't list saved maps", err));
+      }
     } finally {
       setBusy(false);
     }
@@ -476,12 +540,23 @@ export default function ObjectsPanel() {
     setBusy(true);
     try {
       const saved = await getMap(id);
+      cacheMapBody(saved.id, saved.title, saved.data, saved.is_public);
       loadMap(saved.id, saved.title, saved.data);
       const v = saved.data.viewport;
       mapRef.current?.jumpTo({ center: [v.lng, v.lat], zoom: v.zoom });
       setSavedList(null);
     } catch (err) {
-      alert(`Load failed: ${err instanceof Error ? err.message : err}`);
+      const cached = err instanceof TypeError ? getCachedMapBody(id) : null;
+      if (cached) {
+        loadMap(cached.id, cached.title, cached.data);
+        const v = cached.data.viewport;
+        mapRef.current?.jumpTo({ center: [v.lng, v.lat], zoom: v.zoom });
+        setSavedList(null);
+      } else if (err instanceof TypeError) {
+        alert("This map isn't available offline — open it once while online first.");
+      } else {
+        alert(describeApiError("Load failed", err));
+      }
     } finally {
       setBusy(false);
     }
@@ -494,7 +569,7 @@ export default function ObjectsPanel() {
       setSavedList((l) => l?.filter((m) => m.id !== id) ?? null);
       if (useMapStore.getState().currentMap.id === id) markSaved("");
     } catch (err) {
-      alert(`Delete failed: ${err instanceof Error ? err.message : err}`);
+      alert(describeApiError("Delete failed", err));
     }
   }
 
@@ -505,7 +580,7 @@ export default function ObjectsPanel() {
         (l) => l?.map((m) => (m.id === id ? { ...m, is_public: makePublic ? 1 : 0 } : m)) ?? null,
       );
     } catch (err) {
-      alert(`Couldn't update sharing: ${err instanceof Error ? err.message : err}`);
+      alert(describeApiError("Couldn't update sharing", err));
     }
   }
 
@@ -571,6 +646,10 @@ export default function ObjectsPanel() {
             )}
           </div>
 
+          {syncNotice && (
+            <p className="rounded bg-emerald-50 px-2 py-1 text-xs text-emerald-800">{syncNotice}</p>
+          )}
+
           <label className="flex items-center gap-1.5 px-1 text-xs text-gray-500">
             <input
               type="checkbox"
@@ -632,6 +711,12 @@ export default function ObjectsPanel() {
               <h3 className="px-1 pb-1 text-xs font-semibold uppercase tracking-wide text-gray-500">
                 Saved maps
               </h3>
+              {listIsOffline && (
+                <p className="px-1 pb-1 text-xs text-amber-600">
+                  Offline — showing the last synced list; opening a map you&rsquo;ve loaded
+                  here before still works.
+                </p>
+              )}
               {savedList.length === 0 && (
                 <p className="px-1 text-sm text-gray-500">No saved maps yet.</p>
               )}
