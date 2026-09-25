@@ -514,8 +514,7 @@ export default function ObjectsPanel() {
 
   // Mirror all saved maps for offline use once per app load (no-op offline).
   useEffect(() => {
-    const st = useMapStore.getState();
-    void syncOfflineMaps(st.dirty ? (st.currentMap.id ?? undefined) : undefined);
+    void syncOfflineMaps(() => useMapStore.getState().currentMap.id ?? null);
   }, []);
 
   async function handleOpenList() {

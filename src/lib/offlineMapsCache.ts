@@ -74,21 +74,24 @@ export function getCachedMapBody(id: string): CachedMapBody | null {
 /**
  * Background prefetch: while online, mirror the maps list and every map body
  * that is missing or stale locally, so tracks/markers are there offline
- * without having to open each map first. Skips `skipId` (the map currently
- * open with unsaved edits): overwriting its cached body would replace the
- * merge base and hide those edits from the next save's merge. Best-effort —
- * any failure (offline, signed out) just stops quietly.
+ * without having to open each map first. Never touches the map currently
+ * open (`getOpenId`, re-read per map since the user may open one mid-sync):
+ * its cached body is the merge base for local state, and advancing it to a
+ * newer server copy — even with no local edits — would make objects added
+ * elsewhere look like local deletions on the next save. Best-effort — any
+ * failure (offline, signed out) just stops quietly.
  */
-export async function syncOfflineMaps(skipId?: string): Promise<void> {
+export async function syncOfflineMaps(getOpenId: () => string | null): Promise<void> {
   try {
     const list = await listMaps();
     cacheMapsList(list);
     // Most recently updated first, so the LRU cap keeps the ones you use.
     for (const m of list) {
-      if (m.id === skipId) continue;
+      if (m.id === getOpenId()) continue;
       const cached = getCachedMapBody(m.id);
       if (cached && cached.cachedAt >= m.updated_at * 1000) continue;
       const saved = await getMap(m.id);
+      if (saved.id === getOpenId()) continue;
       cacheMapBody(saved.id, saved.title, saved.data, saved.is_public);
     }
   } catch {
