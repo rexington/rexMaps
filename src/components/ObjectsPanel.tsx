@@ -23,6 +23,7 @@ import { mergeSavedMapData } from "@/lib/mapMerge";
 import {
   cacheMapBody,
   cacheMapsList,
+  syncOfflineMaps,
   getCachedMapBody,
   getCachedMapsList,
 } from "@/lib/offlineMapsCache";
@@ -510,6 +511,12 @@ export default function ObjectsPanel() {
     return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps -- reads fresh state at fire time; only dirty/autosaveEnabled should retrigger
   }, [autosaveEnabled, dirty]);
+
+  // Mirror all saved maps for offline use once per app load (no-op offline).
+  useEffect(() => {
+    const st = useMapStore.getState();
+    void syncOfflineMaps(st.dirty ? (st.currentMap.id ?? undefined) : undefined);
+  }, []);
 
   async function handleOpenList() {
     if (savedList) {

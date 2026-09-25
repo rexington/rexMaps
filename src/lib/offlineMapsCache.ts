@@ -1,3 +1,4 @@
+import { getMap, listMaps } from "./savedMaps";
 import type { SavedMapData, SavedMapSummary } from "./savedMaps";
 
 /**
@@ -17,7 +18,7 @@ import type { SavedMapData, SavedMapSummary } from "./savedMaps";
 
 const LIST_KEY = "rexmaps-offline-maps-list";
 const BODIES_KEY = "rexmaps-offline-maps-bodies";
-const MAX_CACHED_BODIES = 20;
+const MAX_CACHED_BODIES = 40;
 
 export interface CachedMapBody {
   id: string;
@@ -68,4 +69,29 @@ export function cacheMapBody(id: string, title: string, data: SavedMapData, isPu
 export function getCachedMapBody(id: string): CachedMapBody | null {
   const bodies = readJSON<Record<string, CachedMapBody>>(BODIES_KEY);
   return bodies?.[id] ?? null;
+}
+
+/**
+ * Background prefetch: while online, mirror the maps list and every map body
+ * that is missing or stale locally, so tracks/markers are there offline
+ * without having to open each map first. Skips `skipId` (the map currently
+ * open with unsaved edits): overwriting its cached body would replace the
+ * merge base and hide those edits from the next save's merge. Best-effort —
+ * any failure (offline, signed out) just stops quietly.
+ */
+export async function syncOfflineMaps(skipId?: string): Promise<void> {
+  try {
+    const list = await listMaps();
+    cacheMapsList(list);
+    // Most recently updated first, so the LRU cap keeps the ones you use.
+    for (const m of list) {
+      if (m.id === skipId) continue;
+      const cached = getCachedMapBody(m.id);
+      if (cached && cached.cachedAt >= m.updated_at * 1000) continue;
+      const saved = await getMap(m.id);
+      cacheMapBody(saved.id, saved.title, saved.data, saved.is_public);
+    }
+  } catch {
+    // offline / unauthenticated — nothing to do
+  }
 }
