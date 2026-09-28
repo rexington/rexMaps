@@ -24,3 +24,23 @@ body {
   color: var(--foreground);
   font-family: Arial, Helvetica, sans-serif;
 }
+
+/* Heading cone on MapLibre's location dot (src/lib/mapControls.ts). Its
+   bottom-center sits on the dot's center and is the rotation pivot; the
+   transparent lower band keeps it from tinting the dot itself. */
+.rexmaps-heading-cone {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 52px;
+  transform-origin: 50% 100%;
+  pointer-events: none;
+  clip-path: polygon(50% 100%, 0 0, 100% 0);
+  background: linear-gradient(
+    to top,
+    transparent 0 16%,
+    rgba(37, 99, 235, 0.55) 16%,
+    rgba(37, 99, 235, 0) 100%
+  );
+}

@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { elevationAt } from "@/lib/elevation";
 import { metersToFeet, type LngLat } from "@/lib/geo";
 import { buildStyle } from "@/lib/layers/compositor";
+import { HeadingModeControl, ZoomLevelControl } from "@/lib/mapControls";
 import { configureMapWorkers, watchMapWorkers } from "@/lib/mapWorkers";
 import { useOnline } from "@/lib/online";
 import {
@@ -508,14 +509,18 @@ export default function MapView() {
       zoom: viewport.zoom,
       attributionControl: { compact: true },
     });
-    map.addControl(new NavigationControl({ visualizePitch: true }), "bottom-right");
-    map.addControl(
-      new GeolocateControl({
-        positionOptions: { enableHighAccuracy: true },
-        trackUserLocation: true,
-      }),
-      "bottom-right",
-    );
+    // Compass button replaced by HeadingModeControl (north-up/direction-up).
+    map.addControl(new NavigationControl({ showCompass: false }), "bottom-right");
+    const geolocate = new GeolocateControl({
+      positionOptions: { enableHighAccuracy: true },
+      trackUserLocation: true,
+    });
+    map.addControl(geolocate, "bottom-right");
+    map.addControl(new HeadingModeControl(geolocate), "bottom-right");
+    // Zoom first: bottom corners prepend each new control, so this lands
+    // after the scale bar in the DOM and floats onto the same row (see
+    // ZoomLevelControl) instead of stacking into the elevation readout.
+    map.addControl(new ZoomLevelControl(), "bottom-left");
     map.addControl(new ScaleControl({ unit: "imperial" }), "bottom-left");
 
     map.on("moveend", () => {
