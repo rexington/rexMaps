@@ -608,7 +608,11 @@ export default function ObjectsPanel() {
     "rounded-md bg-white px-2 py-1 text-xs font-medium text-gray-700 shadow-sm border border-gray-200 hover:border-emerald-600 hover:text-emerald-800 disabled:opacity-40";
 
   return (
-    <div className="absolute left-2 top-2 z-10 w-72 max-w-[calc(100vw-1rem)] select-none">
+    <div
+      className={`absolute left-2 top-2 w-72 max-w-[calc(100vw-1rem)] select-none ${
+        open ? "z-30 sm:z-10" : "z-10"
+      }`}
+    >
       {/* Was sm:top-14 on desktop (clearing the centered Toolbar/SearchBox
           row, which used to collide with this at ~950px wide) — moved back
           to top-2 per request. Tested at 700–1300px wide: the closed

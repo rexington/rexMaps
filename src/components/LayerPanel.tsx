@@ -253,10 +253,17 @@ export default function LayerPanel() {
   const overlays = available.filter((d) => d.category === "overlay");
 
   return (
-    <div className="absolute right-2 top-2 z-10 w-72 max-w-[calc(100vw-1rem)] select-none">
+    <div
+      className={`absolute right-2 top-2 w-72 max-w-[calc(100vw-1rem)] select-none ${
+        open ? "z-30 sm:z-10" : "z-10"
+      }`}
+    >
       {/* Was sm:top-14 on desktop (clearing the centered Toolbar/SearchBox
           row) — moved back to top-2 per request; see the matching note in
-          ObjectsPanel.tsx. */}
+          ObjectsPanel.tsx. Mobile-only z-30 while open: the Toolbar/
+          SearchBox column (MapView, z-20) runs down the right edge on
+          phones and otherwise covers this panel's ✕/◉ buttons. Desktop
+          keeps z-10 so that column stays on top per its own note. */}
       <button
         onClick={() => setOpen((o) => !o)}
         className="mb-1 ml-auto block rounded-md bg-white/95 px-3 py-1.5 text-sm font-medium text-gray-800 shadow"
