@@ -6,7 +6,6 @@ import {
   NavigationControl,
   Popup,
   ScaleControl,
-  setWorkerUrl,
   type GeoJSONSource,
   type LngLat as MaplibreLngLat,
   type MapMouseEvent,
@@ -16,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { elevationAt } from "@/lib/elevation";
 import { metersToFeet, type LngLat } from "@/lib/geo";
 import { buildStyle } from "@/lib/layers/compositor";
+import { configureMapWorkers, watchMapWorkers } from "@/lib/mapWorkers";
 import {
   cachedOverlayData,
   customSourceId,
@@ -50,9 +50,7 @@ import Toolbar, { DrawHint } from "./Toolbar";
 import { registerSentinelProtocol } from "@/lib/layers/sentinel";
 import { registerSlopeProtocol } from "@/lib/layers/slope";
 
-// Self-hosted worker (copied to public/ on postinstall) — Turbopack breaks
-// maplibre's own worker URL, which silently disables all vector tile loading.
-setWorkerUrl("/maplibre-gl-worker.mjs");
+configureMapWorkers();
 // slope://terrarium/{z}/{x}/{y} tiles, computed client-side from the DEM.
 registerSlopeProtocol();
 // sentinel://tile/{z}/{x}/{y} — rewrites TILEMATRIX for the CDSE WMTS grid.
@@ -739,7 +737,9 @@ export default function MapView() {
     (window as unknown as { __rexmap?: MaplibreMap }).__rexmap = map;
     (window as unknown as { __rexstore?: typeof useMapStore }).__rexstore =
       useMapStore;
+    const stopWorkerWatch = watchMapWorkers(map);
     return () => {
+      stopWorkerWatch();
       unsubscribe();
       window.removeEventListener("keydown", onKeyDown);
       if (elevationTimer) clearTimeout(elevationTimer);

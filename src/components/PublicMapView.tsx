@@ -4,13 +4,13 @@ import {
   Map as MaplibreMap,
   NavigationControl,
   ScaleControl,
-  setWorkerUrl,
   type MapMouseEvent,
 } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
 import { useEffect, useRef, useState } from "react";
 import { bounds } from "@/lib/geo";
 import { buildStyle } from "@/lib/layers/compositor";
+import { configureMapWorkers, watchMapWorkers } from "@/lib/mapWorkers";
 import { OBJECTS_SOURCE } from "@/lib/layers/objectLayers";
 import { registerSentinelProtocol } from "@/lib/layers/sentinel";
 import { registerSlopeProtocol } from "@/lib/layers/slope";
@@ -44,7 +44,7 @@ function hitTest(map: MaplibreMap, point: MapMouseEvent["point"]): string | null
 // Same one-time setup as MapView — Turbopack breaks maplibre's own worker
 // bootstrapping, and slope/sentinel tiles need their custom protocols
 // registered before any style referencing them is applied.
-setWorkerUrl("/maplibre-gl-worker.mjs");
+configureMapWorkers();
 registerSlopeProtocol();
 registerSentinelProtocol();
 
@@ -133,8 +133,10 @@ export default function PublicMapView({ id }: { id: string }) {
       }
     });
 
+    const stopWorkerWatch = watchMapWorkers(map);
     return () => {
       cancelled = true;
+      stopWorkerWatch();
       map.remove();
       mapRef.current = null;
       setSelectedId(null);
