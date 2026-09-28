@@ -15,6 +15,15 @@ import type { LayerDef } from "./layers/types";
 
 export const TILE_CACHE = "rexmaps-tiles-v1";
 
+/** Cache key for a tile URL. OpenFreeMap tiles drop their dated build so a
+ * pack survives /planet rotating to a newer build. MUST stay identical to
+ * tileCacheKey() in public/sw.js (which can't import this module). */
+const OFM_TILE_RE = /^https:\/\/tiles\.openfreemap\.org\/planet\/[^/]+\/(\d+)\/(\d+)\/(\d+)\.pbf$/;
+export function tileCacheKey(url: string): string {
+  const m = OFM_TILE_RE.exec(url);
+  return m ? `https://tiles.openfreemap.org/planet/_/${m[1]}/${m[2]}/${m[3]}.pbf` : url;
+}
+
 // Google (ToS forbids caching) and Sentinel (its tile URLs embed today's
 // date — a cached pack would request URLs the live app never asks for again)
 // are structurally excluded via worksOffline(), not just unchecked by default.
@@ -118,22 +127,35 @@ async function layerAssets(def: LayerDef): Promise<LayerAssets> {
     };
   }
 
-  // getFragment() itself fetches the style JSON, and for a TileJSON-referenced
-  // source (e.g. OpenFreeMap's date-stamped /planet) the TileJSON too. Both
-  // land on the same host as the tiles themselves, already in the service
-  // worker's cache-first allowlist — that fetch, made right here, is enough
-  // to capture that metadata into the pack with no extra code.
+  // getFragment() fetches only the style JSON. A source may instead point at
+  // a TileJSON via `url` (OpenFreeMap's /planet names a dated build) — resolve
+  // it here, taking tiles *and* zoom bounds from the TileJSON (the style
+  // source has no maxzoom; defaulting to 22 would request nonexistent tiles).
+  // That fetch goes through the service worker, which also caches the TileJSON
+  // for offline use. Before 2026-09-28 url-sources were silently skipped, so
+  // packs never contained OpenFreeMap's actual vector tiles.
   const fragment = await getFragment(def);
   const tileTemplates: TileTemplate[] = [];
+  const staticUrls: string[] = [];
   for (const src of Object.values(fragment.sources)) {
-    if ("tiles" in src && Array.isArray(src.tiles)) {
-      const minzoom = "minzoom" in src && typeof src.minzoom === "number" ? src.minzoom : 0;
-      const maxzoom = "maxzoom" in src && typeof src.maxzoom === "number" ? src.maxzoom : 22;
-      for (const template of src.tiles) tileTemplates.push({ template, minzoom, maxzoom });
+    let tiles: unknown = "tiles" in src ? src.tiles : undefined;
+    let minzoom = "minzoom" in src && typeof src.minzoom === "number" ? src.minzoom : undefined;
+    let maxzoom = "maxzoom" in src && typeof src.maxzoom === "number" ? src.maxzoom : undefined;
+    if (!Array.isArray(tiles) && "url" in src && typeof src.url === "string") {
+      const res = await fetch(src.url);
+      if (!res.ok) throw new Error(`TileJSON fetch failed ${res.status}: ${src.url}`);
+      const tj = (await res.json()) as { tiles?: string[]; minzoom?: number; maxzoom?: number };
+      tiles = tj.tiles?.map((t) => new URL(t, src.url as string).href.replace(/%7B/g, "{").replace(/%7D/g, "}"));
+      minzoom ??= tj.minzoom;
+      maxzoom ??= tj.maxzoom;
+      staticUrls.push(src.url);
+    }
+    if (!Array.isArray(tiles)) continue;
+    for (const template of tiles as string[]) {
+      tileTemplates.push({ template, minzoom: minzoom ?? 0, maxzoom: maxzoom ?? 22 });
     }
   }
 
-  const staticUrls: string[] = [];
   const spriteEntries =
     typeof fragment.sprite === "string"
       ? [fragment.sprite]
@@ -291,7 +313,7 @@ export async function downloadArea(opts: DownloadOptions): Promise<DownloadResul
       const res = await fetch(url, { signal });
       if (res.ok || res.type === "opaque") {
         const len = Number(res.headers.get("content-length"));
-        await cache.put(url, res.clone());
+        await cache.put(tileCacheKey(url), res.clone());
         byteSize += Number.isFinite(len) && len > 0 ? len : 15_000;
         stored++;
       }

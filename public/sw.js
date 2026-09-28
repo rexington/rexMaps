@@ -32,6 +32,24 @@ function isCacheFirstHost(url) {
   );
 }
 
+// OpenFreeMap names a dated build in its TileJSON (/planet →
+// /planet/20260913_164504_pt/{z}/{x}/{y}.pbf) and rotates it every few days.
+// Tiles are cached under a build-independent key so a pack downloaded
+// against one build still answers the map's requests after /planet has moved
+// on (and vice versa). Mixing builds across tiles is harmless for a basemap.
+// MUST stay identical to tileCacheKey() in src/lib/offline.ts.
+const OFM_TILE_RE = /^https:\/\/tiles\.openfreemap\.org\/planet\/[^/]+\/(\d+)\/(\d+)\/(\d+)\.pbf$/;
+function tileCacheKey(url) {
+  const m = OFM_TILE_RE.exec(url);
+  return m ? `https://tiles.openfreemap.org/planet/_/${m[1]}/${m[2]}/${m[3]}.pbf` : url;
+}
+
+// The TileJSON itself: network-first, so online use always follows the
+// current build (an old one eventually disappears); cached copy offline.
+function isOfmTileJson(url) {
+  return url.host === "tiles.openfreemap.org" && url.pathname === "/planet";
+}
+
 function isTerrariumDem(url) {
   return (
     url.host === "s3.amazonaws.com" &&
@@ -92,6 +110,10 @@ self.addEventListener("fetch", (event) => {
     event.respondWith(handleNavigate(req));
     return;
   }
+  if (isOfmTileJson(url)) {
+    event.respondWith(networkFirst(req, TILE_CACHE));
+    return;
+  }
   if (isCacheFirstHost(url) || isTerrariumDem(url)) {
     event.respondWith(cacheFirst(req, TILE_CACHE));
     return;
@@ -125,11 +147,31 @@ async function handleNavigate(req) {
 
 async function cacheFirst(req, cacheName) {
   const cache = await caches.open(cacheName);
-  const cached = await cache.match(req);
+  const key = tileCacheKey(req.url);
+  // Exact-URL fallback: OFM tiles cached before build-independent keys.
+  const cached = (await cache.match(key)) || (key !== req.url && (await cache.match(req)));
   if (cached) return cached;
-  const res = await fetch(req);
+  let res;
+  try {
+    res = await fetch(req);
+  } catch {
+    // Offline + cache miss: a plain network error, never a rejected
+    // respondWith (iOS logs those as "FetchEvent.respondWith received an error").
+    return Response.error();
+  }
   // A response lacking CORS (opaque) can still be cached and replayed, just
   // not inspected — only skip caching real, observable failures.
-  if (res.ok || res.type === "opaque") cache.put(req, res.clone());
+  if (res.ok || res.type === "opaque") cache.put(key, res.clone());
   return res;
+}
+
+async function networkFirst(req, cacheName) {
+  const cache = await caches.open(cacheName);
+  try {
+    const res = await fetch(req);
+    if (res.ok) cache.put(req, res.clone());
+    return res;
+  } catch {
+    return (await cache.match(req)) || Response.error();
+  }
 }
