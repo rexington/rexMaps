@@ -595,6 +595,14 @@ export default function ObjectsPanel() {
     newMap();
   }
 
+  // Same end state as New (blank untitled map, layers/view kept), but named
+  // for detaching from a saved map so later edits — and autosave — can't
+  // write back to it.
+  function handleClose() {
+    if (dirty && !confirm(`Close "${currentMap.title}" and discard unsaved changes?`)) return;
+    newMap();
+  }
+
   async function handleFile(file: File) {
     try {
       const text = await file.text();
@@ -678,6 +686,11 @@ export default function ObjectsPanel() {
             <button className={btn} onClick={handleSave} disabled={busy}>
               Save
             </button>
+            {currentMap.id && (
+              <button className={btn} onClick={handleClose} title="Stop editing this saved map">
+                Close
+              </button>
+            )}
             <button className={btn} onClick={() => fileInput.current?.click()}>
               Import
             </button>
