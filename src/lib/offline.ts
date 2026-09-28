@@ -1,4 +1,4 @@
-import { ELEVATION_Z, terrariumTileUrl } from "./elevation";
+import { ELEVATION_Z, TERRARIUM_TILE_TEMPLATE, terrariumTileUrl } from "./elevation";
 import { getFragment } from "./layers/fragments";
 import { layerDef, LAYER_DEFS, worksOffline } from "./layers/registry";
 import { tracestrackTileUrl } from "./layers/tracestrack";
@@ -70,6 +70,8 @@ interface TileTemplate {
    * live views, so there's no coverage lost by not requesting past it. */
   minzoom: number;
   maxzoom: number;
+  /** Extra tiles per side to fetch around the bbox (slope needs neighbors). */
+  apron?: number;
 }
 
 interface LayerAssets {
@@ -102,7 +104,15 @@ async function layerAssets(def: LayerDef): Promise<LayerAssets> {
     const minzoom = def.minzoom ?? 0;
     const maxzoom = def.maxzoom ?? 22;
     return {
-      tileTemplates: tiles.map((template) => ({ template, minzoom, maxzoom })),
+      tileTemplates: tiles.map((template) =>
+        template.startsWith("slope://")
+          ? // Computed on-device (slope.ts) from the DEM tile at the same
+            // z/x/y plus its 8 neighbors — cache those, never the slope://
+            // URL itself (it isn't fetchable; the canary used to choke on
+            // it and abort the whole pack).
+            { template: TERRARIUM_TILE_TEMPLATE, minzoom, maxzoom, apron: 1 }
+          : { template, minzoom, maxzoom },
+      ),
       staticUrls: [],
       glyphs: [],
     };
@@ -184,7 +194,7 @@ export async function estimateDownload(
     for (const t of assets.tileTemplates) {
       const lo = Math.max(opts.zMin, t.minzoom);
       const hi = Math.min(opts.zMax, t.maxzoom);
-      for (let z = lo; z <= hi; z++) tiles += tileCount(opts.bbox, z);
+      for (let z = lo; z <= hi; z++) tiles += tileCount(opts.bbox, z, t.apron);
     }
   }
   if (opts.includeTerrain) tiles += tileCount(opts.bbox, ELEVATION_Z, 1);
@@ -233,12 +243,12 @@ export async function downloadArea(opts: DownloadOptions): Promise<DownloadResul
     if (!def) continue;
     const assets = await layerAssets(def);
     for (const url of assets.staticUrls) urls.add(url);
-    for (const { template, minzoom, maxzoom } of assets.tileTemplates) {
+    for (const { template, minzoom, maxzoom, apron } of assets.tileTemplates) {
       canaryHosts.add(new URL(fillTemplate(template, 0, 0, 0)).host);
       const lo = Math.max(zMin, minzoom);
       const hi = Math.min(zMax, maxzoom);
       for (let z = lo; z <= hi; z++) {
-        const r = tileRange(bbox, z);
+        const r = tileRange(bbox, z, apron);
         for (let x = r.xMin; x <= r.xMax; x++) {
           for (let y = r.yMin; y <= r.yMax; y++) urls.add(fillTemplate(template, z, x, y));
         }

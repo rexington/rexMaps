@@ -7,8 +7,10 @@ import { haversine, pathLength, type LngLat } from "./geo";
  */
 
 /** Shared with slope.ts and the offline downloader — one source of truth. */
+export const TERRARIUM_TILE_TEMPLATE =
+  "https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png";
 export const terrariumTileUrl = (z: number, x: number, y: number) =>
-  `https://s3.amazonaws.com/elevation-tiles-prod/terrarium/${z}/${x}/${y}.png`;
+  TERRARIUM_TILE_TEMPLATE.replace("{z}", String(z)).replace("{x}", String(x)).replace("{y}", String(y));
 export const ELEVATION_Z = 13; // ~19 m/px at mid latitudes — plenty for trail profiles
 const TILE_SIZE = 256;
 
