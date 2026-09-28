@@ -16,6 +16,7 @@ import { elevationAt } from "@/lib/elevation";
 import { metersToFeet, type LngLat } from "@/lib/geo";
 import { buildStyle } from "@/lib/layers/compositor";
 import { configureMapWorkers, watchMapWorkers } from "@/lib/mapWorkers";
+import { useOnline } from "@/lib/online";
 import {
   cachedOverlayData,
   customSourceId,
@@ -486,6 +487,7 @@ export default function MapView() {
   const setSelected = useMapStore((s) => s.setSelected);
   // "Possible routes" hint: only while actually drawing a snapped line.
   const trailOverlay = useMapStore((s) => s.tool === "line" && s.snapEnabled);
+  const online = useOnline();
 
   // Fetch this account's custom overlays once. Not persisted locally (see
   // mapStore.ts), so this is the only thing that populates them after load —
@@ -765,6 +767,7 @@ export default function MapView() {
     buildStyle(stack, currentObjectsFC(), currentDraftFC(), {
       trailOverlay,
       customOverlays,
+      offline: !online,
     }).then((style) => {
       if (cancelled || seq !== buildSeq.current) return;
       const map = mapRef.current;
@@ -796,7 +799,7 @@ export default function MapView() {
     return () => {
       cancelled = true;
     };
-  }, [stack, sentinel, trailOverlay, customOverlays]);
+  }, [stack, sentinel, trailOverlay, customOverlays, online]);
 
   return (
     <div className="relative h-dvh w-full">

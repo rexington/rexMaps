@@ -9,3 +9,10 @@
 export function tracestrackKey(): string | undefined {
   return process.env.NEXT_PUBLIC_TRACESTRACK_KEY || undefined;
 }
+
+/** Tile URL template, or undefined with no key. Shared by the compositor and
+ * the offline-pack downloader so both request (and cache) identical URLs. */
+export function tracestrackTileUrl(): string | undefined {
+  const key = tracestrackKey();
+  return key ? `https://tile.tracestrack.com/topo__/{z}/{x}/{y}.png?key=${key}` : undefined;
+}

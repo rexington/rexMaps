@@ -5,9 +5,9 @@ import { getFragment } from "./fragments";
 import { googleTileUrls } from "./google";
 import { EMPTY_FC, objectStyleParts } from "./objectLayers";
 import { applyGroupOpacity } from "./opacity";
-import { layerDef } from "./registry";
+import { layerDef, worksOffline } from "./registry";
 import { sentinelSource } from "./sentinel";
-import { tracestrackKey } from "./tracestrack";
+import { tracestrackTileUrl } from "./tracestrack";
 import { trailOverlayStyleParts } from "./trailOverlay";
 import type { ActiveLayer, RasterLayerDef } from "./types";
 
@@ -37,9 +37,9 @@ async function rasterEntry(
     tiles = src.tiles;
     tileSize = src.tileSize;
   } else if (def.tiles === "tracestrack") {
-    const key = tracestrackKey();
-    if (!key) return null; // no API key configured — skip silently
-    tiles = [`https://tile.tracestrack.com/topo__/{z}/{x}/{y}.png?key=${key}`];
+    const url = tracestrackTileUrl();
+    if (!url) return null; // no API key configured — skip silently
+    tiles = [url];
     tileSize = 512; // native tile size for the plain (non-@1x) endpoint
   } else {
     tiles = def.tiles;
@@ -66,7 +66,13 @@ export async function buildStyle(
   stack: ActiveLayer[],
   objectsData: FeatureCollection = EMPTY_FC,
   draftData: FeatureCollection = EMPTY_FC,
-  options: { trailOverlay?: boolean; customOverlays?: CustomOverlayDef[] } = {},
+  options: {
+    trailOverlay?: boolean;
+    customOverlays?: CustomOverlayDef[];
+    /** Skip layers that can't render offline (worksOffline) instead of
+     * letting every one of their tiles fail. */
+    offline?: boolean;
+  } = {},
 ): Promise<StyleSpecification> {
   const style: StyleSpecification = {
     version: 8,
@@ -84,6 +90,7 @@ export async function buildStyle(
   for (const entry of stack) {
     if (!entry.visible || entry.opacity === 0) continue;
     const def = layerDef(entry.defId);
+    if (def && options.offline && !worksOffline(def)) continue;
 
     if (!def) {
       // Not a static registry layer — maybe a user-defined custom overlay.

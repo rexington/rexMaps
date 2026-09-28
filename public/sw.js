@@ -23,6 +23,7 @@ const CACHE_FIRST_HOSTS = [
   "arcgisonline.com", // server.* (imagery) and services.* (hillshade)
   "basemap.nationalmap.gov", // USGS
   "tiles.arcgis.com", // USFS Forest Service Basemap
+  "tile.tracestrack.com", // Tracestrack Topo (key in query string; cached per Rex, 2026-09-28)
 ];
 
 function isCacheFirstHost(url) {

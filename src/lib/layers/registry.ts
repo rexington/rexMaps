@@ -133,3 +133,13 @@ export const LAYER_DEFS: LayerDef[] = [
 
 export const layerDef = (id: string): LayerDef | undefined =>
   LAYER_DEFS.find((d) => d.id === id);
+
+/**
+ * Whether a layer can render with no network at all (given its tiles were
+ * cached while online). False for Google (ToS forbids caching) and Sentinel
+ * (tile URLs embed today's date, so yesterday's cache never matches). Drives
+ * both offline-pack eligibility and skipping the layer while offline.
+ */
+export function worksOffline(def: LayerDef): boolean {
+  return !(def.kind === "raster" && (def.tiles === "google-session" || def.tiles === "sentinel-cdse"));
+}

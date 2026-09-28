@@ -16,7 +16,7 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useState } from "react";
 import { googleApiKey } from "@/lib/layers/google";
-import { LAYER_DEFS, layerDef } from "@/lib/layers/registry";
+import { LAYER_DEFS, layerDef, worksOffline } from "@/lib/layers/registry";
 import {
   sentinelInstanceId,
   sentinelScenes,
@@ -25,6 +25,7 @@ import {
 import { tracestrackKey } from "@/lib/layers/tracestrack";
 import type { ActiveLayer, LayerDef } from "@/lib/layers/types";
 import { mapRef } from "@/lib/mapRef";
+import { useOnline } from "@/lib/online";
 import { removeCustomOverlayDef, useMapStore } from "@/store/mapStore";
 import CustomOverlaySection from "./CustomOverlaySection";
 import OfflineSection from "./OfflineSection";
@@ -139,11 +140,14 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
   const status = useMapStore((s) => s.customOverlayStatus[entry.defId]);
   const def = layerDef(entry.defId) ?? customOverlays.find((c) => c.id === entry.defId);
   const { setOpacity, toggleVisible, removeLayer } = useMapStore();
+  const online = useOnline();
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: entry.defId });
 
   if (!def) return null;
   const isCustom = def.kind === "feature-query";
+  // Compositor skips these while offline (see worksOffline); say so here.
+  const offlineHidden = !online && def.kind !== "feature-query" && !worksOffline(def);
   return (
     <li
       ref={setNodeRef}
@@ -164,7 +168,9 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
         </button>
         <span
           className={`flex-1 truncate text-sm ${
-            entry.visible ? "text-gray-900" : "text-gray-400"
+            entry.visible && !offlineHidden
+              ? "text-gray-900"
+              : "text-gray-400"
           }`}
           title={"description" in def ? def.description : undefined}
         >
@@ -201,7 +207,10 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
           {Math.round(entry.opacity * 100)}%
         </span>
       </div>
-      {entry.defId === "sentinel-s2" && <SentinelControls />}
+      {offlineHidden && (
+        <p className="mt-1 pl-6 text-xs text-amber-700">Unavailable offline — hidden until you reconnect</p>
+      )}
+      {entry.defId === "sentinel-s2" && online && <SentinelControls />}
       {isCustom && status?.error && (
         <p className="mt-1 pl-6 text-xs text-red-600">{status.error}</p>
       )}
@@ -228,6 +237,7 @@ function ActiveRow({ entry }: { entry: ActiveLayer }) {
 
 export default function LayerPanel() {
   const { stack, addLayer, moveLayer } = useMapStore();
+  const online = useOnline();
   const [open, setOpen] = useState(false);
   const sensors = useSensors(
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
@@ -306,7 +316,9 @@ export default function LayerPanel() {
                   </h3>
                   <ul className="space-y-1">
                     {defs.map((def) => {
-                      const noKey = missingKeyReason(def);
+                      const noKey =
+                        missingKeyReason(def) ??
+                        (!online && !worksOffline(def) ? "Unavailable offline" : null);
                       return (
                         <li key={def.id}>
                           <button
@@ -316,6 +328,7 @@ export default function LayerPanel() {
                             className="w-full rounded-md border border-dashed border-gray-300 bg-white px-2 py-1.5 text-left text-sm text-gray-700 hover:border-emerald-600 hover:text-emerald-800 disabled:cursor-not-allowed disabled:opacity-40"
                           >
                             + {def.name}
+                            {!online && !worksOffline(def) && " (unavailable offline)"}
                           </button>
                         </li>
                       );

@@ -1,6 +1,7 @@
 import { ELEVATION_Z, terrariumTileUrl } from "./elevation";
 import { getFragment } from "./layers/fragments";
-import { layerDef, LAYER_DEFS } from "./layers/registry";
+import { layerDef, LAYER_DEFS, worksOffline } from "./layers/registry";
+import { tracestrackTileUrl } from "./layers/tracestrack";
 import type { LayerDef } from "./layers/types";
 
 /**
@@ -14,18 +15,13 @@ import type { LayerDef } from "./layers/types";
 
 export const TILE_CACHE = "rexmaps-tiles-v1";
 
-// Google (ToS forbids caching), Sentinel (its tile URLs embed today's date —
-// a cached pack would request URLs the live app never asks for again), and
-// Tracestrack (caching/redistribution terms not yet confirmed — see
-// layerAssets() below) are structurally excluded, not just unchecked by
-// default.
+// Google (ToS forbids caching) and Sentinel (its tile URLs embed today's
+// date — a cached pack would request URLs the live app never asks for again)
+// are structurally excluded via worksOffline(), not just unchecked by default.
+// Tracestrack without a configured key has nothing to download.
 export function offlineEligibleLayers(): LayerDef[] {
   return LAYER_DEFS.filter(
-    (d) =>
-      !(
-        d.kind === "raster" &&
-        (d.tiles === "google-session" || d.tiles === "sentinel-cdse" || d.tiles === "tracestrack")
-      ),
+    (d) => worksOffline(d) && !(d.kind === "raster" && d.tiles === "tracestrack" && !tracestrackTileUrl()),
   );
 }
 
@@ -92,13 +88,17 @@ async function layerAssets(def: LayerDef): Promise<LayerAssets> {
   if (def.kind === "raster") {
     // google-session/sentinel-cdse: excluded per their own documented terms
     // (no caching / cache-hostile rolling window — see docs/PLAN.md).
-    // tracestrack: excluded conservatively — its caching/redistribution
-    // terms haven't been confirmed, unlike the other two; revisit if that
-    // gets verified.
+    // tracestrack: included since 2026-09-28 at Rex's call (personal,
+    // non-commercial offline use; see docs/LAYERS.md).
+    const tracestrack = def.tiles === "tracestrack" ? tracestrackTileUrl() : undefined;
     const tiles =
-      def.tiles === "google-session" || def.tiles === "sentinel-cdse" || def.tiles === "tracestrack"
-        ? []
-        : def.tiles;
+      def.tiles === "tracestrack"
+        ? tracestrack
+          ? [tracestrack]
+          : []
+        : def.tiles === "google-session" || def.tiles === "sentinel-cdse"
+          ? []
+          : def.tiles;
     const minzoom = def.minzoom ?? 0;
     const maxzoom = def.maxzoom ?? 22;
     return {
